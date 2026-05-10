@@ -55,10 +55,27 @@ else()
     set(ENABLE_OPENMP      OFF CACHE BOOL "" FORCE)
     set(ENABLE_LONG_DOUBLE OFF CACHE BOOL "" FORCE)
     set(BUILD_TESTS        OFF CACHE BOOL "" FORCE)
+
+    # FFTW 3.3.10 ships cmake_minimum_required(VERSION 2.8.12), which
+    # CMake 3.31+ rejects.  Write a portable patch script into the build
+    # directory and run it via PATCH_COMMAND after the source is fetched.
+    set(_fftw_patch "${CMAKE_BINARY_DIR}/fftw_patch_cmake_min.cmake")
+    file(WRITE "${_fftw_patch}" [[
+file(READ "${FFTW_SRC}" _c)
+string(REGEX REPLACE
+    "cmake_minimum_required\\(VERSION [0-9]+\\.[0-9.]+"
+    "cmake_minimum_required(VERSION 3.5"
+    _c "${_c}")
+file(WRITE "${FFTW_SRC}" "${_c}")
+]])
+
     FetchContent_Declare(fftw3
         GIT_REPOSITORY https://github.com/FFTW/fftw3.git
         GIT_TAG        fftw-3.3.10
-        GIT_SHALLOW    TRUE)
+        GIT_SHALLOW    TRUE
+        PATCH_COMMAND  ${CMAKE_COMMAND}
+            "-DFFTW_SRC=<SOURCE_DIR>/CMakeLists.txt"
+            -P "${_fftw_patch}")
     FetchContent_MakeAvailable(fftw3)
     set(FFTW3_TARGET  fftw3)
     set(FFTW3_INCLUDE "${fftw3_SOURCE_DIR}/api")
