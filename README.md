@@ -77,8 +77,9 @@ cmake --build build
    ```sh
    sudo apt install build-essential cmake ninja-build libfftw3-dev libsdl3-dev
    ```
-   SDL3\_mixer does not yet have a widely-available apt package; CMake will
-   fetch and build it automatically if it is not found.
+   SDL3\_mixer and SDL3\_ttf do not yet have widely-available apt packages;
+   CMake will fetch and build them automatically (including FreeType, which
+   SDL3\_ttf vendors when built from source).
 2. Configure and build:
    ```sh
    cmake -S . -B build -G Ninja

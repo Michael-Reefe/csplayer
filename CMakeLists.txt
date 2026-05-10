@@ -78,6 +78,8 @@ if(NOT SDL3_ttf_FOUND)
             "  brew install sdl3_ttf")
     else()
         message(STATUS "SDL3_ttf not found via find_package -- fetching from source")
+        # Vendor FreeType so we don't require libfreetype-dev on the host.
+        set(SDL3TTF_VENDORED ON CACHE BOOL "" FORCE)
         FetchContent_Declare(SDL3_ttf
             GIT_REPOSITORY https://github.com/libsdl-org/SDL_ttf.git
             GIT_TAG        release-3.2.0
