@@ -38,38 +38,51 @@ if(NOT SDL3_mixer_FOUND)
     FetchContent_MakeAvailable(SDL3_mixer)
 endif()
 
-# FFTW double-precision (fftw3): prefer system installation via find_library,
-# fall back to building from source.
-# NOTE: csplayer is GPL-3.0 licensed, which is compatible with FFTW's GPL.
+# FFTW double-precision (fftw3): required system dependency.
+# FFTW's own CMake build has known codelet-compilation issues on several
+# platforms (notably Apple Silicon), so we require it to be installed via
+# the system package manager rather than building it from source.
+#
+# Install instructions:
+#   macOS (Homebrew):  brew install fftw
+#   Debian / Ubuntu:   sudo apt install libfftw3-dev
+#   Arch Linux:        sudo pacman -S fftw
+#   Windows (MSYS2):   pacman -S mingw-w64-ucrt-x86_64-fftw
 find_library(FFTW3_LIB NAMES fftw3 fftw3-3
-    HINTS "$ENV{MSYSTEM_PREFIX}/lib" /usr/local/lib /usr/lib)
+    HINTS
+        "$ENV{MSYSTEM_PREFIX}/lib"   # MSYS2
+        /opt/homebrew/lib            # Homebrew on Apple Silicon
+        /usr/local/lib               # Homebrew on Intel Mac / manual installs
+        /usr/lib)
 find_path(FFTW3_INCLUDE_DIR NAMES fftw3.h
-    HINTS "$ENV{MSYSTEM_PREFIX}/include" /usr/local/include /usr/include)
-if(FFTW3_LIB AND FFTW3_INCLUDE_DIR)
-    set(FFTW3_TARGET  "${FFTW3_LIB}")
-    set(FFTW3_INCLUDE "${FFTW3_INCLUDE_DIR}")
-else()
-    # Fetch and build FFTW from source (double precision is the default).
-    message(STATUS "fftw3 not found -- building from source")
-    set(ENABLE_THREADS     OFF CACHE BOOL "" FORCE)
-    set(ENABLE_OPENMP      OFF CACHE BOOL "" FORCE)
-    set(ENABLE_LONG_DOUBLE OFF CACHE BOOL "" FORCE)
-    set(BUILD_TESTS        OFF CACHE BOOL "" FORCE)
+    HINTS
+        "$ENV{MSYSTEM_PREFIX}/include"
+        /opt/homebrew/include
+        /usr/local/include
+        /usr/include)
 
-    # FFTW 3.3.10 ships cmake_minimum_required(VERSION 2.8.12), which
-    # CMake 3.31+ rejects.  CMAKE_POLICY_VERSION_MINIMUM (added in CMake 3.31)
-    # tells CMake to accept subproject minimum-version declarations as low as
-    # 3.5, which covers FFTW without weakening our own policy requirements.
-    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-
-    FetchContent_Declare(fftw3
-        GIT_REPOSITORY https://github.com/FFTW/fftw3.git
-        GIT_TAG        fftw-3.3.10
-        GIT_SHALLOW    TRUE)
-    FetchContent_MakeAvailable(fftw3)
-    set(FFTW3_TARGET  fftw3)
-    set(FFTW3_INCLUDE "${fftw3_SOURCE_DIR}/api")
+if(NOT FFTW3_LIB OR NOT FFTW3_INCLUDE_DIR)
+    if(APPLE)
+        message(FATAL_ERROR
+            "FFTW3 not found.\n"
+            "Install it with Homebrew and re-run cmake:\n"
+            "  brew install fftw")
+    elseif(UNIX)
+        message(FATAL_ERROR
+            "FFTW3 not found.\n"
+            "Install it with your package manager and re-run cmake:\n"
+            "  Debian/Ubuntu: sudo apt install libfftw3-dev\n"
+            "  Arch Linux:    sudo pacman -S fftw")
+    else()
+        message(FATAL_ERROR
+            "FFTW3 not found.\n"
+            "Install it in an MSYS2 UCRT64 shell and re-run cmake:\n"
+            "  pacman -S mingw-w64-ucrt-x86_64-fftw")
+    endif()
 endif()
+
+set(FFTW3_TARGET  "${FFTW3_LIB}")
+set(FFTW3_INCLUDE "${FFTW3_INCLUDE_DIR}")
 
 # ── Executable ────────────────────────────────────────────────────────────────
 add_executable(csplayer

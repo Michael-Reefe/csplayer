@@ -58,7 +58,7 @@ cmake --build build
 
 1. Install [Homebrew](https://brew.sh/), then:
    ```sh
-   brew install cmake ninja sdl3 fftw
+   brew install cmake ninja fftw sdl3
    brew install sdl3_mixer   # optional — CMake will fetch from source if absent
    ```
 2. Configure and build:
@@ -75,8 +75,7 @@ cmake --build build
 
 1. Install dependencies:
    ```sh
-   sudo apt install build-essential cmake ninja-build \
-                    libsdl3-dev libfftw3-dev
+   sudo apt install build-essential cmake ninja-build libfftw3-dev libsdl3-dev
    ```
    SDL3\_mixer does not yet have a widely-available apt package; CMake will
    fetch and build it automatically if it is not found.
