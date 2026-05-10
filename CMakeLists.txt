@@ -56,8 +56,9 @@ else()
     set(ENABLE_LONG_DOUBLE OFF CACHE BOOL "" FORCE)
     set(BUILD_TESTS        OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(fftw3
-        URL      https://www.fftw.org/fftw-3.3.10.tar.gz
-        URL_HASH SHA256=56c932549852cddcfafdab3820b0200a7d6dd58b84d50e0db6a74a246c7a373d)
+        GIT_REPOSITORY https://github.com/FFTW/fftw3.git
+        GIT_TAG        fftw-3.3.10
+        GIT_SHALLOW    TRUE)
     FetchContent_MakeAvailable(fftw3)
     set(FFTW3_TARGET  fftw3)
     set(FFTW3_INCLUDE "${fftw3_SOURCE_DIR}/api")
