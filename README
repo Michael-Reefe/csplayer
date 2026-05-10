@@ -1,0 +1,10 @@
+# csplayer
+
+A lightweight audio player program that shows you the spectrum of your audio in real time.  Ever wanted to see the frequencies that your favorite music is putting out, without the ugly bars that audio programs so typically use?  This is the program for you!  The spectrum is shown in high detail, from 20 Hz to 20 kHz, for all of your spectral sleuthing needs (I just think it looks neat).
+
+### Installation
+
+```bash
+cmake -S . -B build
+cmake --build  build
+```
