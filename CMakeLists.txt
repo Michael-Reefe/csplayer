@@ -78,8 +78,20 @@ if(NOT SDL3_ttf_FOUND)
             "  brew install sdl3_ttf")
     else()
         message(STATUS "SDL3_ttf not found via find_package -- fetching from source")
-        # Vendor FreeType so we don't require libfreetype-dev on the host.
-        set(SDL3TTF_VENDORED ON CACHE BOOL "" FORCE)
+        # FreeType is required by SDL3_ttf but may not be installed on the host.
+        # Declaring it with OVERRIDE_FIND_PACKAGE intercepts SDL3_ttf's internal
+        # find_package(Freetype REQUIRED) call and satisfies it via FetchContent,
+        # regardless of how SDL3_ttf's CMakeLists names its vendoring option.
+        set(FT_DISABLE_ZLIB     ON CACHE BOOL "" FORCE)
+        set(FT_DISABLE_BZIP2    ON CACHE BOOL "" FORCE)
+        set(FT_DISABLE_PNG      ON CACHE BOOL "" FORCE)
+        set(FT_DISABLE_HARFBUZZ ON CACHE BOOL "" FORCE)
+        set(FT_DISABLE_BROTLI   ON CACHE BOOL "" FORCE)
+        FetchContent_Declare(Freetype
+            GIT_REPOSITORY https://github.com/freetype/freetype.git
+            GIT_TAG        VER-2-13-3
+            GIT_SHALLOW    TRUE
+            OVERRIDE_FIND_PACKAGE)
         FetchContent_Declare(SDL3_ttf
             GIT_REPOSITORY https://github.com/libsdl-org/SDL_ttf.git
             GIT_TAG        release-3.2.0
