@@ -78,10 +78,15 @@ if(NOT SDL3_ttf_FOUND)
             "  brew install sdl3_ttf")
     else()
         message(STATUS "SDL3_ttf not found via find_package -- fetching from source")
-        # FreeType is required by SDL3_ttf but may not be installed on the host.
-        # Declaring it with OVERRIDE_FIND_PACKAGE intercepts SDL3_ttf's internal
-        # find_package(Freetype REQUIRED) call and satisfies it via FetchContent,
-        # regardless of how SDL3_ttf's CMakeLists names its vendoring option.
+        # FreeType is required by SDL3_ttf but is not always installed on the host.
+        # We fetch it explicitly before SDL3_ttf so that:
+        #   1. FetchContent_MakeAvailable(Freetype) runs FreeType's CMakeLists.txt,
+        #      creating the lowercase 'freetype' target.
+        #   2. We alias it to 'Freetype::Freetype' (the namespaced form SDL3_ttf
+        #      expects from a system find_package).
+        #   3. OVERRIDE_FIND_PACKAGE makes SDL3_ttf's internal find_package(Freetype)
+        #      call see the already-populated FetchContent entry (a no-op), so it
+        #      finds 'Freetype::Freetype' without searching the system.
         set(FT_DISABLE_ZLIB     ON CACHE BOOL "" FORCE)
         set(FT_DISABLE_BZIP2    ON CACHE BOOL "" FORCE)
         set(FT_DISABLE_PNG      ON CACHE BOOL "" FORCE)
@@ -92,6 +97,10 @@ if(NOT SDL3_ttf_FOUND)
             GIT_TAG        VER-2-13-3
             GIT_SHALLOW    TRUE
             OVERRIDE_FIND_PACKAGE)
+        FetchContent_MakeAvailable(Freetype)
+        if(TARGET freetype AND NOT TARGET Freetype::Freetype)
+            add_library(Freetype::Freetype ALIAS freetype)
+        endif()
         FetchContent_Declare(SDL3_ttf
             GIT_REPOSITORY https://github.com/libsdl-org/SDL_ttf.git
             GIT_TAG        release-3.2.0
