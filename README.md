@@ -58,8 +58,7 @@ cmake --build build
 
 1. Install [Homebrew](https://brew.sh/), then:
    ```sh
-   brew install cmake ninja fftw sdl3
-   brew install sdl3_mixer   # optional — CMake will fetch from source if absent
+   brew install cmake ninja fftw sdl3 sdl3_mixer
    ```
 2. Configure and build:
    ```sh

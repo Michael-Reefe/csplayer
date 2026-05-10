@@ -9,39 +9,67 @@ set(CMAKE_C_EXTENSIONS OFF)
 # ── Build options ────────────────────────────────────────────────────────────
 option(ENABLE_ASAN "Enable AddressSanitizer and debug symbols" OFF)
 
+# ── Homebrew prefix (macOS) ───────────────────────────────────────────────────
+# Homebrew on Apple Silicon installs to /opt/homebrew; on Intel Macs to
+# /usr/local.  Adding both to CMAKE_PREFIX_PATH lets find_package locate
+# Homebrew-installed SDL3, SDL3_mixer, and FFTW without extra hints.
+if(APPLE)
+    list(APPEND CMAKE_PREFIX_PATH /opt/homebrew /usr/local)
+endif()
+
 # ── Dependency fetching ───────────────────────────────────────────────────────
 include(FetchContent)
 
-# SDL3: prefer a system-installed package; fall back to fetching from source.
+# ── SDL3 ─────────────────────────────────────────────────────────────────────
+# Prefer a system-installed package.  On macOS, require Homebrew installation
+# (brew install sdl3) rather than building from source, because the FetchContent
+# source build of SDL3_mixer requires a specific paired SDL3 version that is
+# difficult to pin reliably.  On other platforms, fall back to FetchContent.
 find_package(SDL3 QUIET CONFIG)
 if(NOT SDL3_FOUND)
-    message(STATUS "SDL3 not found via find_package -- fetching from source")
-    FetchContent_Declare(SDL3
-        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-        GIT_TAG        release-3.2.10
-        GIT_SHALLOW    TRUE)
-    FetchContent_MakeAvailable(SDL3)
+    if(APPLE)
+        message(FATAL_ERROR
+            "SDL3 not found.\n"
+            "Install it with Homebrew and re-run cmake:\n"
+            "  brew install sdl3")
+    else()
+        message(STATUS "SDL3 not found via find_package -- fetching from source")
+        FetchContent_Declare(SDL3
+            GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+            GIT_TAG        release-3.2.10
+            GIT_SHALLOW    TRUE)
+        FetchContent_MakeAvailable(SDL3)
+    endif()
 endif()
 
-# SDL3_mixer: same strategy; enable bundled decoders for portability.
+# ── SDL3_mixer ────────────────────────────────────────────────────────────────
+# Same strategy as SDL3: require a system package on macOS, fall back to
+# FetchContent on other platforms.
 find_package(SDL3_mixer QUIET CONFIG)
 if(NOT SDL3_mixer_FOUND)
-    message(STATUS "SDL3_mixer not found via find_package -- fetching from source")
-    set(SDL3MIXER_MP3  ON  CACHE BOOL "" FORCE)
-    set(SDL3MIXER_FLAC ON  CACHE BOOL "" FORCE)
-    set(SDL3MIXER_OGG  ON  CACHE BOOL "" FORCE)
-    set(SDL3MIXER_OPUS OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(SDL3_mixer
-        GIT_REPOSITORY https://github.com/libsdl-org/SDL_mixer.git
-        GIT_TAG        release-3.2.0
-        GIT_SHALLOW    TRUE)
-    FetchContent_MakeAvailable(SDL3_mixer)
+    if(APPLE)
+        message(FATAL_ERROR
+            "SDL3_mixer not found.\n"
+            "Install it with Homebrew and re-run cmake:\n"
+            "  brew install sdl3_mixer")
+    else()
+        message(STATUS "SDL3_mixer not found via find_package -- fetching from source")
+        set(SDL3MIXER_MP3  ON  CACHE BOOL "" FORCE)
+        set(SDL3MIXER_FLAC ON  CACHE BOOL "" FORCE)
+        set(SDL3MIXER_OGG  ON  CACHE BOOL "" FORCE)
+        set(SDL3MIXER_OPUS OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(SDL3_mixer
+            GIT_REPOSITORY https://github.com/libsdl-org/SDL_mixer.git
+            GIT_TAG        release-3.2.0
+            GIT_SHALLOW    TRUE)
+        FetchContent_MakeAvailable(SDL3_mixer)
+    endif()
 endif()
 
-# FFTW double-precision (fftw3): required system dependency.
-# FFTW's own CMake build has known codelet-compilation issues on several
-# platforms (notably Apple Silicon), so we require it to be installed via
-# the system package manager rather than building it from source.
+# ── FFTW double-precision (fftw3) ─────────────────────────────────────────────
+# Required system dependency on all platforms.  FFTW's own CMake build has
+# known codelet-compilation issues on several architectures (notably Apple
+# Silicon), so we do not attempt a source build.
 #
 # Install instructions:
 #   macOS (Homebrew):  brew install fftw
