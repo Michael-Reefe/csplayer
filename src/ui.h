@@ -12,7 +12,7 @@
  * to the audio and playlist modules, keeping the UI layer state-free with
  * respect to playback logic.
  *
- * Copyright (C) 2026 csplayer contributors.  Licensed under GPL-3.0.
+ * Copyright (C) 2026 Michael Reefe.  Licensed under GPL-3.0.
  */
 
 #ifndef CSPLAYER_UI_H
@@ -47,6 +47,7 @@ typedef struct {
     bool  vol_dragging;  /* true while the mouse button is held on the vol slider */
     f32   vol_pos;       /* [0, 1] slider position; 1.0 = 0 dB (full volume)     */
     i32   pl_hover;      /* playlist row under the mouse cursor, -1 = none        */
+    bool  sb_dragging;   /* true while dragging the playlist scrollbar            */
     bool  dialog_open;   /* true while a file-picker dialog is pending            */
 } ui_t;
 
@@ -74,15 +75,15 @@ void ui_draw(SDL_Renderer       *r,
  * Returns the action triggered (UI_ACTION_NONE if none).
  */
 ui_action_t ui_on_mouse_down(ui_t *ui, const SDL_MouseButtonEvent *e,
-                              const audio_t *audio, const playlist_t *pl);
+                              const audio_t *audio, playlist_t *pl);
 
 /*
- * Handle a mouse-motion event (hover + seek-bar drag).
+ * Handle a mouse-motion event (hover + seek-bar drag + scrollbar drag).
  * held: true when the left button is held down.
- * Returns UI_ACTION_SEEK while dragging (ui->scrub_pos is updated).
+ * Returns UI_ACTION_SEEK while scrubbing (ui->scrub_pos is updated).
  */
 ui_action_t ui_on_mouse_motion(ui_t *ui, const SDL_MouseMotionEvent *e,
-                                bool held);
+                                bool held, playlist_t *pl);
 
 /*
  * Handle a mouse-button-up event (end of seek-bar drag).
@@ -106,7 +107,7 @@ ui_action_t ui_on_key(const SDL_KeyboardEvent *e);
  * Returns UI_ACTION_SET_VOLUME (ui->vol_pos updated) or UI_ACTION_SEEK
  * (ui->scrub_pos updated), or UI_ACTION_NONE.
  */
-ui_action_t ui_on_scroll(ui_t *ui, float lx, float ly, float dy,
-                          f32 current_seek_pos);
+ui_action_t ui_on_scroll(ui_t *ui, f32 lx, f32 ly, f32 dy,
+                          f32 current_seek_pos, playlist_t *pl);
 
 #endif /* CSPLAYER_UI_H */

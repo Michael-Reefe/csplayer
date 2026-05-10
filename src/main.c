@@ -17,7 +17,7 @@
  *   event_files_added  — pushed by the file-dialog callback after the user
  *                        selects files; the paths are in s_dialog_buf.
  *
- * Copyright (C) 2026 csplayer contributors.  Licensed under GPL-3.0.
+ * Copyright (C) 2026 Michael Reefe.  Licensed under GPL-3.0.
  */
 
 #define SDL_MAIN_USE_CALLBACKS 1
@@ -84,6 +84,7 @@ static void file_dialog_cb(void *userdata, const char *const *filelist,
 
     app_t *app = (app_t *)userdata;
     assert(app != NULL);
+    assert(app->event_files_added != 0);
 
     s_dialog_count = 0;
 
@@ -111,6 +112,7 @@ static void file_dialog_cb(void *userdata, const char *const *filelist,
 static f64 audio_elapsed_sec(const audio_t *audio)
 {
     assert(audio != NULL);
+    assert(audio->sample_rate >= 0.0f);
     if (audio->duration_frames <= 0 || audio->sample_rate <= 0.0f) { return 0.0; }
     return (f64)audio_get_pos(audio)
            * (f64)audio->duration_frames / (f64)audio->sample_rate;
@@ -119,7 +121,8 @@ static f64 audio_elapsed_sec(const audio_t *audio)
 /* Convert a volume slider position [0,1] (linear in dB) to a linear gain. */
 static f32 vol_pos_to_gain(f32 pos)
 {
-    assert(pos >= 0.0f && pos <= 1.0f);
+    assert(pos >= 0.0f);
+    assert(pos <= 1.0f);
     f32 db = VOL_DB_MIN * (1.0f - pos);   /* 0 → VOL_DB_MIN dB, 1 → 0 dB */
     return powf(10.0f, db / 20.0f);
 }
@@ -131,6 +134,7 @@ static f32 vol_pos_to_gain(f32 pos)
 static void load_current_track(app_t *app)
 {
     assert(app != NULL);
+    assert(app->playlist.count <= PLAYLIST_MAX);
 
     const char *path = playlist_current_path(&app->playlist);
     if (path == NULL) { return; }
@@ -165,8 +169,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
     /* Point SDL3 at our static instance. */
     *appstate = &g_app;
 
-    SDL_SetAppMetadata(CSPLAYER_APP_NAME, CSPLAYER_APP_VERSION,
-                       CSPLAYER_APP_ID);
+    (void)SDL_SetAppMetadata(CSPLAYER_APP_NAME, CSPLAYER_APP_VERSION,
+                             CSPLAYER_APP_ID);
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -195,12 +199,12 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
     }
 
     /* Set logical (pixel-art) presentation. */
-    SDL_SetRenderLogicalPresentation(g_app.renderer, LOG_W, LOG_H,
-                                     SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+    (void)SDL_SetRenderLogicalPresentation(g_app.renderer, LOG_W, LOG_H,
+                                           SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
 
     /* Lock the window to a 16:9 aspect ratio and set minimum size to 1× logical. */
-    SDL_SetWindowAspectRatio(g_app.window, 16.0f / 9.0f, 16.0f / 9.0f);
-    SDL_SetWindowMinimumSize(g_app.window, LOG_W, LOG_H);
+    (void)SDL_SetWindowAspectRatio(g_app.window, 16.0f / 9.0f, 16.0f / 9.0f);
+    (void)SDL_SetWindowMinimumSize(g_app.window, LOG_W, LOG_H);
 
     /* Initialise modules in dependency order. */
     if (!audio_init(&g_app.audio))     { return SDL_APP_FAILURE; }
@@ -232,6 +236,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 {
     app_t *app = (app_t *)appstate;
     assert(app != NULL);
+    assert(app->renderer != NULL);
 
     /* Capture latest PCM snapshot, run FFT, update display data. */
     audio_snapshot_ring(&app->audio, app->pcm_snapshot);
@@ -245,6 +250,168 @@ SDL_AppResult SDL_AppIterate(void *appstate)
     return SDL_APP_CONTINUE;
 }
 
+/* ── Event sub-handlers ──────────────────────────────────────────────────── */
+
+/* Dispatch a ui_action_t returned by any input handler to audio/playlist. */
+static void dispatch_action(app_t *app, ui_action_t action)
+{
+    assert(app != NULL);
+    assert(app->playlist.count <= PLAYLIST_MAX);
+
+    switch (action) {
+    case UI_ACTION_PLAY_PAUSE:
+        if (app->audio.status == AUDIO_STATUS_STOPPED) {
+            (void)audio_play(&app->audio);
+        } else {
+            (void)audio_toggle_pause(&app->audio);
+        }
+        break;
+    case UI_ACTION_REWIND:
+        if (audio_elapsed_sec(&app->audio) < 1.0 &&
+                playlist_prev(&app->playlist) >= 0) {
+            load_current_track(app);
+            (void)audio_play(&app->audio);
+        } else {
+            (void)audio_seek(&app->audio, 0.0f);
+        }
+        break;
+    case UI_ACTION_NEXT:
+        (void)playlist_next(&app->playlist);
+        load_current_track(app);
+        (void)audio_play(&app->audio);
+        break;
+    case UI_ACTION_SEEK:
+        (void)audio_seek(&app->audio, app->ui.scrub_pos);
+        break;
+    case UI_ACTION_SET_VOLUME:
+        audio_set_volume(&app->audio, vol_pos_to_gain(app->ui.vol_pos));
+        break;
+    case UI_ACTION_OPEN_DIALOG: {
+        app->ui.dialog_open = true;
+        static const SDL_DialogFileFilter filters[] = {
+            { "Audio files", "wav;mp3;flac;ogg;opus" },
+            { "WAV",  "wav"  },
+            { "MP3",  "mp3"  },
+            { "FLAC", "flac" },
+        };
+        SDL_ShowOpenFileDialog(file_dialog_cb, app, app->window,
+                               filters, 4, NULL, true);
+        break;
+    }
+    case UI_ACTION_PL_SELECT:
+        (void)playlist_set_current(&app->playlist, app->ui.pl_hover);
+        load_current_track(app);
+        break;
+    case UI_ACTION_PL_REMOVE: {
+        bool was_current = (app->ui.pl_hover == app->playlist.current);
+        (void)playlist_remove(&app->playlist, app->ui.pl_hover);
+        if (was_current) {
+            if (app->playlist.current >= 0) { load_current_track(app); }
+            else                            { audio_unload(&app->audio); }
+        }
+        (void)playlist_save(&app->playlist);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+static void handle_track_done(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->event_track_done != 0);
+
+    i32 next = playlist_next(&app->playlist);
+    if (next >= 0) {
+        load_current_track(app);
+        (void)audio_play(&app->audio);
+    }
+}
+
+static void handle_files_added(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->event_files_added != 0);
+
+    if (s_dialog_count <= 0) { return; }
+
+    const char *ptrs[PLAYLIST_MAX + 1];
+    i32 limit = s_dialog_count;
+    assert(limit <= PLAYLIST_MAX);
+    for (i32 i = 0; i < limit; i++) { ptrs[i] = s_dialog_buf[i]; }
+    ptrs[limit] = NULL;
+
+    bool had_tracks = (app->playlist.count > 0);
+    (void)playlist_add_paths(&app->playlist, ptrs);
+    if (!had_tracks && app->playlist.count > 0) { load_current_track(app); }
+    (void)playlist_save(&app->playlist);
+}
+
+static void handle_mouse_down(app_t *app, SDL_Event *ev)
+{
+    assert(app != NULL);
+    assert(ev  != NULL);
+
+    SDL_MouseButtonEvent btn = ev->button;
+    (void)SDL_RenderCoordinatesFromWindow(g_app.renderer, btn.x, btn.y,
+                                          &btn.x, &btn.y);
+    ui_action_t action = ui_on_mouse_down(&app->ui, &btn,
+                                           &app->audio, &app->playlist);
+    dispatch_action(app, action);
+}
+
+static void handle_mouse_motion(app_t *app, SDL_Event *ev)
+{
+    assert(app != NULL);
+    assert(ev  != NULL);
+
+    bool held = (ev->motion.state & SDL_BUTTON_LMASK) != 0;
+    SDL_MouseMotionEvent mot = ev->motion;
+    (void)SDL_RenderCoordinatesFromWindow(g_app.renderer, mot.x, mot.y,
+                                          &mot.x, &mot.y);
+    ui_action_t action = ui_on_mouse_motion(&app->ui, &mot, held, &app->playlist);
+    if (action == UI_ACTION_SEEK) {
+        (void)audio_seek(&app->audio, app->ui.scrub_pos);
+    } else if (action == UI_ACTION_SET_VOLUME) {
+        audio_set_volume(&app->audio, vol_pos_to_gain(app->ui.vol_pos));
+    }
+}
+
+static void handle_mouse_up(app_t *app, SDL_Event *ev)
+{
+    assert(app != NULL);
+    assert(ev  != NULL);
+
+    SDL_MouseButtonEvent btn = ev->button;
+    (void)SDL_RenderCoordinatesFromWindow(g_app.renderer, btn.x, btn.y,
+                                          &btn.x, &btn.y);
+    ui_action_t action = ui_on_mouse_up(&app->ui, &btn);
+    if (action == UI_ACTION_SEEK) {
+        (void)audio_seek(&app->audio, app->ui.scrub_pos);
+    } else if (action == UI_ACTION_SET_VOLUME) {
+        audio_set_volume(&app->audio, vol_pos_to_gain(app->ui.vol_pos));
+    }
+}
+
+static void handle_mouse_wheel(app_t *app, SDL_Event *ev)
+{
+    assert(app != NULL);
+    assert(ev  != NULL);
+
+    f32 lx, ly;
+    (void)SDL_RenderCoordinatesFromWindow(g_app.renderer,
+                                          ev->wheel.mouse_x, ev->wheel.mouse_y,
+                                          &lx, &ly);
+    ui_action_t action = ui_on_scroll(&app->ui, lx, ly, ev->wheel.y,
+                                      audio_get_pos(&app->audio), &app->playlist);
+    if (action == UI_ACTION_SET_VOLUME) {
+        audio_set_volume(&app->audio, vol_pos_to_gain(app->ui.vol_pos));
+    } else if (action == UI_ACTION_SEEK) {
+        (void)audio_seek(&app->audio, app->ui.scrub_pos);
+    }
+}
+
 /* ── SDL3 callback: SDL_AppEvent ─────────────────────────────────────────── */
 
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
@@ -253,189 +420,16 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
     assert(app   != NULL);
     assert(event != NULL);
 
-    /* ── Quit ── */
-    if (event->type == SDL_EVENT_QUIT) {
-        return SDL_APP_SUCCESS;
-    }
+    if (event->type == SDL_EVENT_QUIT)               { return SDL_APP_SUCCESS; }
+    if (event->type == app->event_track_done)        { handle_track_done(app);          }
+    if (event->type == app->event_files_added)       { handle_files_added(app);         }
+    if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN)  { handle_mouse_down(app, event);   }
+    if (event->type == SDL_EVENT_MOUSE_MOTION)       { handle_mouse_motion(app, event); }
+    if (event->type == SDL_EVENT_MOUSE_BUTTON_UP)    { handle_mouse_up(app, event);     }
+    if (event->type == SDL_EVENT_MOUSE_WHEEL)        { handle_mouse_wheel(app, event);  }
 
-    /* ── Track finished naturally ── */
-    if (event->type == app->event_track_done) {
-        i32 next = playlist_next(&app->playlist);
-        if (next >= 0) {
-            load_current_track(app);
-            (void)audio_play(&app->audio);
-        }
-        return SDL_APP_CONTINUE;
-    }
-
-    /* ── Files selected via dialog ── */
-    if (event->type == app->event_files_added) {
-        if (s_dialog_count > 0) {
-            /* Build a NULL-terminated pointer array from the staging buffer. */
-            const char *ptrs[PLAYLIST_MAX + 1];
-            i32 limit = s_dialog_count;
-            assert(limit <= PLAYLIST_MAX);
-            for (i32 i = 0; i < limit; i++) {
-                ptrs[i] = s_dialog_buf[i];
-            }
-            ptrs[limit] = NULL;
-
-            bool had_tracks = (app->playlist.count > 0);
-            (void)playlist_add_paths(&app->playlist, ptrs);
-
-            /* If the playlist was empty before, load the first new track. */
-            if (!had_tracks && app->playlist.count > 0) {
-                load_current_track(app);
-            }
-            (void)playlist_save(&app->playlist);
-        }
-        return SDL_APP_CONTINUE;
-    }
-
-    /* ── Mouse events ── */
-    if (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-        /* SDL3 does not translate mouse coordinates for logical presentation;
-         * convert physical window coords → logical renderer coords here. */
-        SDL_MouseButtonEvent btn = event->button;
-        SDL_RenderCoordinatesFromWindow(g_app.renderer, btn.x, btn.y,
-                                        &btn.x, &btn.y);
-        ui_action_t action = ui_on_mouse_down(&app->ui, &btn,
-                                               &app->audio, &app->playlist);
-        switch (action) {
-        case UI_ACTION_PLAY_PAUSE:
-            if (app->audio.status == AUDIO_STATUS_STOPPED) {
-                (void)audio_play(&app->audio);
-            } else {
-                (void)audio_toggle_pause(&app->audio);
-            }
-            break;
-        case UI_ACTION_REWIND:
-            if (audio_elapsed_sec(&app->audio) < 1.0 &&
-                    playlist_prev(&app->playlist) >= 0) {
-                load_current_track(app);
-                (void)audio_play(&app->audio);
-            } else {
-                (void)audio_seek(&app->audio, 0.0f);
-            }
-            break;
-        case UI_ACTION_NEXT:
-            (void)playlist_next(&app->playlist);
-            load_current_track(app);
-            (void)audio_play(&app->audio);
-            break;
-        case UI_ACTION_SEEK:
-            (void)audio_seek(&app->audio, app->ui.scrub_pos);
-            break;
-        case UI_ACTION_SET_VOLUME:
-            audio_set_volume(&app->audio, vol_pos_to_gain(app->ui.vol_pos));
-            break;
-        case UI_ACTION_OPEN_DIALOG: {
-            app->ui.dialog_open = true;
-            static const SDL_DialogFileFilter filters[] = {
-                { "Audio files", "wav;mp3;flac;ogg;opus" },
-                { "WAV",  "wav"  },
-                { "MP3",  "mp3"  },
-                { "FLAC", "flac" },
-            };
-            SDL_ShowOpenFileDialog(file_dialog_cb, app, app->window,
-                                   filters, 4, NULL, true);
-            break;
-        }
-        case UI_ACTION_PL_SELECT:
-            (void)playlist_set_current(&app->playlist, app->ui.pl_hover);
-            load_current_track(app);
-            break;
-        case UI_ACTION_PL_REMOVE: {
-            bool was_current = (app->ui.pl_hover == app->playlist.current);
-            playlist_remove(&app->playlist, app->ui.pl_hover);
-            if (was_current) {
-                if (app->playlist.current >= 0) {
-                    load_current_track(app);
-                } else {
-                    audio_unload(&app->audio);
-                }
-            }
-            (void)playlist_save(&app->playlist);
-            break;
-        }
-        default:
-            break;
-        }
-        return SDL_APP_CONTINUE;
-    }
-
-    if (event->type == SDL_EVENT_MOUSE_MOTION) {
-        bool held = (event->motion.state & SDL_BUTTON_LMASK) != 0;
-        SDL_MouseMotionEvent mot = event->motion;
-        SDL_RenderCoordinatesFromWindow(g_app.renderer, mot.x, mot.y,
-                                        &mot.x, &mot.y);
-        ui_action_t action = ui_on_mouse_motion(&app->ui, &mot, held);
-        if (action == UI_ACTION_SEEK) {
-            (void)audio_seek(&app->audio, app->ui.scrub_pos);
-        } else if (action == UI_ACTION_SET_VOLUME) {
-            audio_set_volume(&app->audio, vol_pos_to_gain(app->ui.vol_pos));
-        }
-        return SDL_APP_CONTINUE;
-    }
-
-    if (event->type == SDL_EVENT_MOUSE_BUTTON_UP) {
-        SDL_MouseButtonEvent btn = event->button;
-        SDL_RenderCoordinatesFromWindow(g_app.renderer, btn.x, btn.y,
-                                        &btn.x, &btn.y);
-        ui_action_t action = ui_on_mouse_up(&app->ui, &btn);
-        if (action == UI_ACTION_SEEK) {
-            (void)audio_seek(&app->audio, app->ui.scrub_pos);
-        } else if (action == UI_ACTION_SET_VOLUME) {
-            audio_set_volume(&app->audio, vol_pos_to_gain(app->ui.vol_pos));
-        }
-        return SDL_APP_CONTINUE;
-    }
-
-    /* ── Keyboard events ── */
     if (event->type == SDL_EVENT_KEY_DOWN && !event->key.repeat) {
-        ui_action_t action = ui_on_key(&event->key);
-        switch (action) {
-        case UI_ACTION_PLAY_PAUSE:
-            if (app->audio.status == AUDIO_STATUS_STOPPED) {
-                (void)audio_play(&app->audio);
-            } else {
-                (void)audio_toggle_pause(&app->audio);
-            }
-            break;
-        case UI_ACTION_REWIND:
-            if (audio_elapsed_sec(&app->audio) < 1.0 &&
-                    playlist_prev(&app->playlist) >= 0) {
-                load_current_track(app);
-                (void)audio_play(&app->audio);
-            } else {
-                (void)audio_seek(&app->audio, 0.0f);
-            }
-            break;
-        case UI_ACTION_NEXT:
-            (void)playlist_next(&app->playlist);
-            load_current_track(app);
-            (void)audio_play(&app->audio);
-            break;
-        default:
-            break;
-        }
-    }
-
-    /* ── Mouse wheel ── */
-    if (event->type == SDL_EVENT_MOUSE_WHEEL) {
-        float lx, ly;
-        SDL_RenderCoordinatesFromWindow(g_app.renderer,
-                                        event->wheel.mouse_x, event->wheel.mouse_y,
-                                        &lx, &ly);
-        ui_action_t action = ui_on_scroll(&app->ui, lx, ly,
-                                          event->wheel.y,
-                                          audio_get_pos(&app->audio));
-        if (action == UI_ACTION_SET_VOLUME) {
-            audio_set_volume(&app->audio, vol_pos_to_gain(app->ui.vol_pos));
-        } else if (action == UI_ACTION_SEEK) {
-            (void)audio_seek(&app->audio, app->ui.scrub_pos);
-        }
-        return SDL_APP_CONTINUE;
+        dispatch_action(app, ui_on_key(&event->key));
     }
 
     return SDL_APP_CONTINUE;

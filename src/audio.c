@@ -1,7 +1,7 @@
 /*
  * audio.c — SDL3_mixer playback engine and PCM ring buffer.
  *
- * Copyright (C) 2026 csplayer contributors.  Licensed under GPL-3.0.
+ * Copyright (C) 2026 Michael Reefe.  Licensed under GPL-3.0.
  */
 
 #include "audio.h"
@@ -22,7 +22,7 @@
  * SDL3_mixer requires a function pointer for MIX_SetTrackRawCallback.
  */
 static void raw_audio_cb(void *userdata, MIX_Track *t,
-                          const SDL_AudioSpec *spec, float *pcm, i32 samples)
+                          const SDL_AudioSpec *spec, f32 *pcm, i32 samples)
 {
     /* Suppress unused-parameter warning — t is provided by the API. */
     (void)t;
@@ -80,7 +80,7 @@ static void track_stopped_cb(void *userdata, MIX_Track *t)
     SDL_Event ev;
     SDL_memset(&ev, 0, sizeof(ev));
     ev.type = a->event_track_done;
-    SDL_PushEvent(&ev);
+    (void)SDL_PushEvent(&ev);
 }
 
 /* ── Internal helpers ────────────────────────────────────────────────────── */
@@ -307,6 +307,7 @@ bool audio_seek(audio_t *a, f32 pos)
 f32 audio_get_pos(const audio_t *a)
 {
     assert(a != NULL);
+    assert(a->sample_rate >= 0.0f);
 
     if (a->track == NULL || a->duration_frames <= 0) {
         return 0.0f;

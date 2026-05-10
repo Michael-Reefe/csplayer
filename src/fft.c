@@ -1,7 +1,7 @@
 /*
  * fft.c — FFTW-based real-to-complex spectrum computation.
  *
- * Copyright (C) 2026 csplayer contributors.  Licensed under GPL-3.0.
+ * Copyright (C) 2026 Michael Reefe.  Licensed under GPL-3.0.
  */
 
 #include "fft.h"
@@ -16,7 +16,8 @@
 
 bool fft_init(fft_t *f)
 {
-    assert(f != NULL);
+    assert(f        != NULL);
+    assert(FFT_SIZE  > 0);
 
     SDL_memset(f, 0, sizeof(*f));
 
@@ -73,7 +74,8 @@ void fft_process(fft_t *f, const f32 *pcm_snapshot)
 
 void fft_quit(fft_t *f)
 {
-    assert(f != NULL);
+    assert(f       != NULL);
+    assert(FFT_BINS  > 0);
 
     if (f->plan != NULL) {
         fftw_destroy_plan(f->plan);
