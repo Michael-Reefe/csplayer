@@ -23,6 +23,7 @@
 #define SDL_MAIN_USE_CALLBACKS 1
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
+#include <SDL3_ttf/SDL_ttf.h>
 #include <math.h>
 #include <assert.h>
 
@@ -128,6 +129,36 @@ static f32 vol_pos_to_gain(f32 pos)
 }
 
 /*
+ * Open the Unifont TTF file and store it in ui->font.  Non-fatal: if TTF
+ * cannot be initialised or the font file is missing, font stays NULL and
+ * render_utf8 falls back to SDL_RenderDebugText.
+ */
+static void init_font(ui_t *ui)
+{
+    assert(ui        != NULL);
+    assert(ui->font  == NULL);
+
+    if (!TTF_Init()) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "init_font: TTF_Init failed: %s — "
+                     "Unicode titles will fall back to ASCII.", SDL_GetError());
+        return;
+    }
+    const char *base = SDL_GetBasePath();
+    if (base == NULL) { return; }
+
+    char font_path[PATH_MAX_LEN];
+    SDL_snprintf(font_path, sizeof(font_path), "%sunifont.otf", base);
+    ui->font = TTF_OpenFont(font_path, 8.0f * (f32)DISPLAY_SCALE);
+    if (ui->font == NULL) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "init_font: TTF_OpenFont('%s') failed: %s — "
+                     "Unicode titles will fall back to ASCII.",
+                     font_path, SDL_GetError());
+    }
+}
+
+/*
  * Load the current playlist track into the audio engine (without playing).
  * Also rebuilds the spectrum LUT in case the new file has a different rate.
  */
@@ -218,6 +249,9 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
     if (!playlist_init(&g_app.playlist)) { return SDL_APP_FAILURE; }
     if (!playlist_load(&g_app.playlist)) { return SDL_APP_FAILURE; }
 
+    /* Initialise SDL3_ttf and load Unifont (non-fatal — falls back to ASCII). */
+    init_font(&g_app.ui);
+
     /* UI state starts zeroed (from .bss). */
     g_app.ui.pl_hover = -1;
     g_app.ui.vol_pos  = 1.0f;   /* start at full volume (0 dB) */
@@ -293,6 +327,8 @@ static void dispatch_action(app_t *app, ui_action_t action)
             { "WAV",  "wav"  },
             { "MP3",  "mp3"  },
             { "FLAC", "flac" },
+            { "OGG",  "ogg"  },
+            { "OPUS", "opus" },
         };
         SDL_ShowOpenFileDialog(file_dialog_cb, app, app->window,
                                filters, 4, NULL, true);
@@ -448,6 +484,12 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result)
     audio_quit(&app->audio);
     fft_quit  (&app->fft);
     /* spectrum and playlist have no resources to free beyond what we own. */
+
+    if (app->ui.font != NULL) {
+        TTF_CloseFont(app->ui.font);
+        app->ui.font = NULL;
+    }
+    TTF_Quit();
 
     /* SDL destroys window and renderer automatically on SDL_Quit. */
 }

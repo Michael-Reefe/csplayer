@@ -37,10 +37,14 @@ typedef  double   f64;
 /* ── Window / presentation ───────────────────────────────────────────────── */
 /* The renderer uses a logical resolution of LOG_W × LOG_H (16:9).
  * SDL3 scales it to the physical window with integer scaling. */
-#define LOG_W   512
-#define LOG_H   288
-#define PHYS_W  1024
-#define PHYS_H  576
+#define LOG_W          512
+#define LOG_H          288
+#define PHYS_W         1024
+#define PHYS_H         576
+/* Integer scale factor from logical to physical pixels (= PHYS_W / LOG_W = 2).
+ * Fonts are opened at ptsize × DISPLAY_SCALE and rendered at 1/DISPLAY_SCALE
+ * logical size so FreeType rasterises at the physical pixel resolution. */
+#define DISPLAY_SCALE  (PHYS_W / LOG_W)
 
 /* ── FFT / audio capture ─────────────────────────────────────────────────── */
 /* FFT_SIZE must be a power of two.  8192 gives ≈5.4 Hz/bin at 44100 Hz. */

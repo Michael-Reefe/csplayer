@@ -58,6 +58,45 @@ static void outline_rect(SDL_Renderer *r, f32 x, f32 y, f32 w, f32 h)
     (void)SDL_RenderRect(r, &rc);
 }
 
+/* ── Internal: Unicode-aware text renderer ───────────────────────────────── */
+
+/*
+ * Render a UTF-8 string using the Unifont TTF font if available, otherwise
+ * fall back to SDL_RenderDebugText (ASCII only, 8×8 built-in font).
+ * The clip rect must be set by the caller if overflow protection is needed.
+ */
+static void render_utf8(SDL_Renderer *r, TTF_Font *font,
+                         const char *text, f32 x, f32 y,
+                         i32 rv, i32 gv, i32 bv, i32 av)
+{
+    assert(r    != NULL);
+    assert(text != NULL);
+    if (text[0] == '\0') { return; }
+    if (font == NULL) {
+        set_col(r, rv, gv, bv, av);
+        (void)SDL_RenderDebugText(r, x, y, text);
+        return;
+    }
+    SDL_Color col = { (Uint8)rv, (Uint8)gv, (Uint8)bv, (Uint8)av };
+    SDL_Surface *surf = TTF_RenderText_Solid(font, text, (size_t)0, col);
+    if (surf == NULL) { return; }
+    SDL_Texture *tex = SDL_CreateTextureFromSurface(r, surf);
+    SDL_DestroySurface(surf);
+    if (tex == NULL) { return; }
+    (void)SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    /* Nearest-neighbour: the texture was rasterised at DISPLAY_SCALE × logical
+     * size; downscaling 1/DISPLAY_SCALE here keeps the pixels sharp after SDL's
+     * integer upscale brings them back to physical-pixel resolution. */
+    (void)SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
+    f32 tw = 0.0f, th = 0.0f;
+    (void)SDL_GetTextureSize(tex, &tw, &th);
+    SDL_FRect dst = { x, y,
+                      tw / (f32)DISPLAY_SCALE,
+                      th / (f32)DISPLAY_SCALE };
+    (void)SDL_RenderTexture(r, tex, NULL, &dst);
+    SDL_DestroyTexture(tex);
+}
+
 /* ── Internal: axis tick tables (static, compile-time constants) ─────────── */
 
 /* Frequency tick positions for the X axis. */
@@ -110,42 +149,48 @@ static i32 db_to_py(f32 db)
  * and elapsed / total time.
  */
 static void draw_header(SDL_Renderer *r,
-                         const audio_t *audio, const playlist_t *pl)
+                         const audio_t *audio, const playlist_t *pl,
+                         const ui_t *ui)
 {
     assert(r     != NULL);
     assert(audio != NULL);
     assert(pl    != NULL);
+    assert(ui    != NULL);
 
     /* Background */
     set_col(r, COL_HEADER);
     fill_rect(r, 0.0f, (f32)HDR_Y, (f32)LOG_W, (f32)HDR_H);
 
-    /* App name */
+    /* App name (ASCII — no TTF needed). */
     set_col(r, COL_NOW);
     (void)SDL_RenderDebugText(r, 4.0f, (f32)(HDR_Y + 6), CSPLAYER_APP_NAME);
 
-    /* Track title (display the entry title, not the full path). */
-    set_col(r, COL_TEXT);
-    if (pl->current >= 0 && pl->current < pl->count) {
-        (void)SDL_RenderDebugText(r, 72.0f, (f32)(HDR_Y + 6),
-                                  pl->entries[pl->current].title);
-    }
-
-    /* Elapsed / total time (right-aligned). */
+    /* Compute time string first so we know its pixel width. */
     f32 pos_frac = audio_get_pos(audio);
     f64 dur_sec  = (audio->duration_frames > 0 && audio->sample_rate > 0.0f)
                        ? (f64)audio->duration_frames / (f64)audio->sample_rate
                        : 0.0;
     f64 elapsed  = pos_frac * dur_sec;
-
     char timebuf[24];
     SDL_snprintf(timebuf, sizeof(timebuf), "%d:%02d / %d:%02d",
                  (i32)(elapsed / 60.0), (i32)elapsed % 60,
                  (i32)(dur_sec / 60.0), (i32)dur_sec % 60);
-
-    /* Right-align: each char is FONT_W pixels wide. */
     i32 tlen = (i32)SDL_strlen(timebuf);
     f32 tx   = (f32)(LOG_W - tlen * FONT_W - 4);
+
+    /* Track title — clip to the gap between app name and time display. */
+    if (pl->current >= 0 && pl->current < pl->count) {
+        i32 clip_w = (i32)tx - 72 - 4;
+        if (clip_w > 0) {
+            SDL_Rect clip = { 72, HDR_Y, clip_w, HDR_H };
+            (void)SDL_SetRenderClipRect(r, &clip);
+            render_utf8(r, ui->font, pl->entries[pl->current].title,
+                        72.0f, (f32)(HDR_Y + 6), COL_TEXT);
+            (void)SDL_SetRenderClipRect(r, NULL);
+        }
+    }
+
+    /* Elapsed / total time (right-aligned, ASCII). */
     set_col(r, COL_DIM);
     (void)SDL_RenderDebugText(r, tx, (f32)(HDR_Y + 6), timebuf);
 }
@@ -356,13 +401,12 @@ static void draw_playlist_row(SDL_Renderer *r, const playlist_t *pl,
     set_col(r, COL_DIM);
     (void)SDL_RenderDebugText(r, (f32)x_num, (f32)ty, numbuf);
 
-    set_col(r, COL_TEXT);
-    char title_trunc[TITLE_MAX_LEN];
-    SDL_strlcpy(title_trunc, pl->entries[idx].title, sizeof(title_trunc));
-    i32 max_chars = (PL_DEL_X - x_title - 44) / FONT_W;
-    if (max_chars < 1) { max_chars = 1; }
-    if ((i32)SDL_strlen(title_trunc) > max_chars) { title_trunc[max_chars] = '\0'; }
-    (void)SDL_RenderDebugText(r, (f32)x_title, (f32)ty, title_trunc);
+    /* Title: clip to the row area so long names don't overflow the delete button. */
+    SDL_Rect title_clip = { x_title, ry, PL_DEL_X - x_title - 4, PL_ROW };
+    (void)SDL_SetRenderClipRect(r, &title_clip);
+    render_utf8(r, ui->font, pl->entries[idx].title,
+                (f32)x_title, (f32)ty, COL_TEXT);
+    (void)SDL_SetRenderClipRect(r, NULL);
 
     if (pl->entries[idx].duration_sec > 0.0) {
         char tbuf[12];
@@ -465,7 +509,7 @@ void ui_draw(SDL_Renderer *r,
     set_col(r, COL_BG);
     (void)SDL_RenderClear(r);
 
-    draw_header(r, audio, playlist);
+    draw_header(r, audio, playlist, ui);
     draw_spectrum_axes(r);
     draw_spectrum_line(r, spectrum);
     draw_playlist(r, playlist, ui);

@@ -20,6 +20,7 @@
 
 #include <stdbool.h>
 #include <SDL3/SDL.h>
+#include <SDL3_ttf/SDL_ttf.h>
 #include "types.h"
 #include "audio.h"
 #include "spectrum.h"
@@ -42,13 +43,14 @@ typedef enum {
 /* ── Module state ────────────────────────────────────────────────────────── */
 
 typedef struct {
-    bool  scrubbing;     /* true while the mouse button is held on the seek bar  */
-    f32   scrub_pos;     /* [0, 1] fraction; valid when scrubbing == true         */
-    bool  vol_dragging;  /* true while the mouse button is held on the vol slider */
-    f32   vol_pos;       /* [0, 1] slider position; 1.0 = 0 dB (full volume)     */
-    i32   pl_hover;      /* playlist row under the mouse cursor, -1 = none        */
-    bool  sb_dragging;   /* true while dragging the playlist scrollbar            */
-    bool  dialog_open;   /* true while a file-picker dialog is pending            */
+    bool      scrubbing;    /* true while the mouse button is held on the seek bar  */
+    f32       scrub_pos;    /* [0, 1] fraction; valid when scrubbing == true         */
+    bool      vol_dragging; /* true while the mouse button is held on the vol slider */
+    f32       vol_pos;      /* [0, 1] slider position; 1.0 = 0 dB (full volume)     */
+    i32       pl_hover;     /* playlist row under the mouse cursor, -1 = none        */
+    bool      sb_dragging;  /* true while dragging the playlist scrollbar            */
+    bool      dialog_open;  /* true while a file-picker dialog is pending            */
+    TTF_Font *font;         /* Unifont for Unicode titles; NULL = ASCII fallback     */
 } ui_t;
 
 /* ── Public interface ────────────────────────────────────────────────────── */

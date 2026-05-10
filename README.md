@@ -5,7 +5,7 @@ A lightweight audio player program that shows you the spectrum of your audio in 
 ### Building from source
 
 csplayer is built with CMake (3.26+). The build system will automatically
-download and compile SDL3, SDL3\_mixer, and FFTW3 from source if they are not
+download and compile SDL3, SDL3\_mixer, SDL3\_ttf, and FFTW3 from source if they are not
 found as system packages, so the only hard prerequisites are a C17 compiler,
 CMake, and a build tool (Ninja or Make).
 
@@ -17,8 +17,9 @@ CMake, and a build tool (Ninja or Make).
    pacman -S mingw-w64-ucrt-x86_64-gcc \
              mingw-w64-ucrt-x86_64-cmake \
              mingw-w64-ucrt-x86_64-ninja \
-             mingw-w64-ucrt-x86_64-SDL3 \
-             mingw-w64-ucrt-x86_64-SDL3_mixer \
+             mingw-w64-ucrt-x86_64-sdl3 \
+             mingw-w64-ucrt-x86_64-sdl3-mixer \
+             mingw-w64-ucrt-x86_64-sdl3-ttf \
              mingw-w64-ucrt-x86_64-fftw
    ```
    The SDL3 and FFTW packages are optional — CMake will fetch them from source
@@ -58,7 +59,7 @@ cmake --build build
 
 1. Install [Homebrew](https://brew.sh/), then:
    ```sh
-   brew install cmake ninja fftw sdl3 sdl3_mixer
+   brew install cmake ninja fftw sdl3 sdl3_mixer sdl3_ttf
    ```
 2. Configure and build:
    ```sh
@@ -103,12 +104,21 @@ cmake --build build
 
 #### AddressSanitizer build
 
-An ASan-instrumented build can be enabled on any platform that supports it
-(GCC/Clang on Linux and macOS; MSVC on Windows with VS 2019 16.9+):
+ASan is supported on Linux/macOS (GCC or Clang) and on Windows with MSVC
+(VS 2019 16.9+). **MinGW GCC on Windows does not ship `libasan`** — CMake
+will reject `-DENABLE_ASAN=ON` with a clear error if you try.
 
+**Linux / macOS:**
 ```sh
 cmake -S . -B build-asan -G Ninja -DENABLE_ASAN=ON
 cmake --build build-asan
 ./build-asan/csplayer
+```
+
+**Windows — Visual Studio 2022:**
+```cmd
+cmake -S . -B build-asan -G "Visual Studio 17 2022" -A x64 -DENABLE_ASAN=ON
+cmake --build build-asan --config Debug
+build-asan\Debug\csplayer.exe
 ```
 

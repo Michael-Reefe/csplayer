@@ -66,6 +66,26 @@ if(NOT SDL3_mixer_FOUND)
     endif()
 endif()
 
+# ── SDL3_ttf ─────────────────────────────────────────────────────────────────
+# Used for Unicode-aware text rendering (track titles).  Same strategy as
+# SDL3 / SDL3_mixer: require a system package on macOS, FetchContent elsewhere.
+find_package(SDL3_ttf QUIET CONFIG)
+if(NOT SDL3_ttf_FOUND)
+    if(APPLE)
+        message(FATAL_ERROR
+            "SDL3_ttf not found.\n"
+            "Install it with Homebrew and re-run cmake:\n"
+            "  brew install sdl3_ttf")
+    else()
+        message(STATUS "SDL3_ttf not found via find_package -- fetching from source")
+        FetchContent_Declare(SDL3_ttf
+            GIT_REPOSITORY https://github.com/libsdl-org/SDL_ttf.git
+            GIT_TAG        release-3.2.0
+            GIT_SHALLOW    TRUE)
+        FetchContent_MakeAvailable(SDL3_ttf)
+    endif()
+endif()
+
 # ── FFTW double-precision (fftw3) ─────────────────────────────────────────────
 # Required system dependency on all platforms.  FFTW's own CMake build has
 # known codelet-compilation issues on several architectures (notably Apple
@@ -124,6 +144,17 @@ add_executable(csplayer
 target_include_directories(csplayer PRIVATE src ${FFTW3_INCLUDE})
 
 # ── Compiler flags ────────────────────────────────────────────────────────────
+# MinGW GCC on Windows does not ship libasan, so -fsanitize=address will fail
+# at link time.  Reject the combination early with a clear message.
+if(ENABLE_ASAN AND WIN32 AND NOT MSVC)
+    message(FATAL_ERROR
+        "AddressSanitizer is not supported by MinGW GCC on Windows.\n"
+        "Use Visual Studio 2022 (MSVC) for ASan on Windows:\n"
+        "  cmake -S . -B build-asan -G \"Visual Studio 17 2022\" -A x64 -DENABLE_ASAN=ON\n"
+        "  cmake --build build-asan --config Debug\n"
+        "Or build on Linux/macOS where GCC/Clang ship libasan.")
+endif()
+
 if(MSVC)
     # MSVC equivalents of -Wall -Werror -Wpedantic
     target_compile_options(csplayer PRIVATE /W4 /WX /permissive-
@@ -145,8 +176,43 @@ endif()
 target_link_libraries(csplayer PRIVATE
     SDL3::SDL3
     SDL3_mixer::SDL3_mixer
+    SDL3_ttf::SDL3_ttf
     ${FFTW3_TARGET}
     ${MATH_LIB})
+
+# ── Unifont (GNU Unicode bitmap font for track title display) ─────────────────
+# Downloaded once at configure time; the application falls back to the built-in
+# SDL_RenderDebugText (ASCII only) if the file is absent at runtime.
+set(UNIFONT_OTF "${CMAKE_BINARY_DIR}/unifont.otf")
+if(NOT EXISTS "${UNIFONT_OTF}")
+    message(STATUS "Downloading Unifont (~5 MB) for Unicode title display...")
+    file(DOWNLOAD
+        "https://unifoundry.com/pub/unifont/unifont-17.0.04/font-builds/unifont-17.0.04.otf"
+        "${UNIFONT_OTF}"
+        SHOW_PROGRESS
+        STATUS UNIFONT_STATUS
+        TLS_VERIFY ON)
+    list(GET UNIFONT_STATUS 0 UNIFONT_ERR)
+    if(UNIFONT_ERR)
+        list(GET UNIFONT_STATUS 1 UNIFONT_ERR_MSG)
+        message(WARNING
+            "Unifont download failed: ${UNIFONT_ERR_MSG}\n"
+            "Unicode track titles will fall back to the built-in ASCII font.\n"
+            "To enable Unicode: download unifont-17.0.04.otf from\n"
+            "  https://unifoundry.com/unifont/index.html\n"
+            "and copy it as 'unifont.otf' next to the csplayer executable.")
+        file(REMOVE "${UNIFONT_OTF}")
+    endif()
+endif()
+
+if(EXISTS "${UNIFONT_OTF}")
+    add_custom_command(TARGET csplayer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${UNIFONT_OTF}"
+            "$<TARGET_FILE_DIR:csplayer>/unifont.otf"
+        VERBATIM
+        COMMENT "Copying unifont.otf next to executable")
+endif()
 
 # ── Windows: copy DLLs next to the executable ─────────────────────────────────
 if(WIN32)
@@ -158,6 +224,11 @@ if(WIN32)
     add_custom_command(TARGET csplayer POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:SDL3_mixer::SDL3_mixer>
+            $<TARGET_FILE_DIR:csplayer>
+        VERBATIM)
+    add_custom_command(TARGET csplayer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:SDL3_ttf::SDL3_ttf>
             $<TARGET_FILE_DIR:csplayer>
         VERBATIM)
 endif()
