@@ -8,7 +8,7 @@
  * The smoothed dB values (smooth_db[]) are maintained in actual decibels so
  * that the y-axis labels correspond directly to what is stored.
  *
- * Copyright (C) 2026 csplayer contributors.  Licensed under GPL-3.0.
+ * Copyright (C) 2026 Michael Reefe.  Licensed under GPL-3.0.
  */
 
 #ifndef CSPLAYER_SPECTRUM_H

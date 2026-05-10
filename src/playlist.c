@@ -5,7 +5,7 @@
  *   Line 1: current track index (integer, -1 if none)
  *   Lines 2+: one absolute file path per line
  *
- * Copyright (C) 2026 csplayer contributors.  Licensed under GPL-3.0.
+ * Copyright (C) 2026 Michael Reefe.  Licensed under GPL-3.0.
  */
 
 #include "playlist.h"

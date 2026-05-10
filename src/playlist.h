@@ -5,7 +5,7 @@
  * allocation).  It is loaded from and saved to a plain-text file in the
  * SDL preference directory so that the track list survives between sessions.
  *
- * Copyright (C) 2026 csplayer contributors.  Licensed under GPL-3.0.
+ * Copyright (C) 2026 Michael Reefe.  Licensed under GPL-3.0.
  */
 
 #ifndef CSPLAYER_PLAYLIST_H

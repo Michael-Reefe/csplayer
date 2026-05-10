@@ -9,7 +9,7 @@
  * dynamic allocation).  FFTW_ESTIMATE is used so that FFTW never writes to
  * the input/output arrays during plan creation, making static buffers safe.
  *
- * Copyright (C) 2026 csplayer contributors.  Licensed under GPL-3.0.
+ * Copyright (C) 2026 Michael Reefe.  Licensed under GPL-3.0.
  */
 
 #ifndef CSPLAYER_FFT_H

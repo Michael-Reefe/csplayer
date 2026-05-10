@@ -11,7 +11,7 @@
  * and writes to ring[].  All other functions run on the main thread and
  * may only read ring[] after acquiring ring_mutex.
  *
- * Copyright (C) 2026 csplayer contributors.  Licensed under GPL-3.0.
+ * Copyright (C) 2026 Michael Reefe.  Licensed under GPL-3.0.
  */
 
 #ifndef CSPLAYER_AUDIO_H

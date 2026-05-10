@@ -1,7 +1,7 @@
 /*
  * spectrum.c — Log-frequency mapping and per-frame spectrum smoothing.
  *
- * Copyright (C) 2026 csplayer contributors.  Licensed under GPL-3.0.
+ * Copyright (C) 2026 Michael Reefe.  Licensed under GPL-3.0.
  */
 
 #include "spectrum.h"
