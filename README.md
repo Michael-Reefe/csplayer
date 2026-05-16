@@ -2,9 +2,13 @@
 
 A lightweight audio player program that shows you the spectrum of your audio in real time.  Ever wanted to see the frequencies that your favorite music is putting out, without the ugly bars that audio programs so typically use?  This is the program for you!  The spectrum is shown in high detail, from 20 Hz to 20 kHz, for all of your spectral sleuthing needs (I just think it looks neat).
 
+### Installing
+
+To install a pre-built program, binaries are available for windows (x86_64 architecture) and macOS (apple silicon).  Check out the releases to find downloads for them!
+
 ### Building from source
 
-csplayer is built with CMake (3.26+) and targets **Windows and macOS only**.
+csplayer is built with CMake (3.26+) and targets **Windows and macOS**.
 The build system will automatically download and compile SDL3, SDL3\_mixer, and
 SDL3\_ttf from source if they are not found as system packages, so the only
 hard prerequisites are a C17 compiler, CMake, and a build tool (Ninja or Make).
