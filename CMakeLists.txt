@@ -12,7 +12,7 @@ option(ENABLE_ASAN "Enable AddressSanitizer and debug symbols" OFF)
 # ── Homebrew prefix (macOS) ───────────────────────────────────────────────────
 # Homebrew on Apple Silicon installs to /opt/homebrew; on Intel Macs to
 # /usr/local.  Adding both to CMAKE_PREFIX_PATH lets find_package locate
-# Homebrew-installed SDL3, SDL3_mixer, and FFTW without extra hints.
+# Homebrew-installed SDL3, SDL3_mixer, and SDL3_ttf without extra hints.
 if(APPLE)
     list(APPEND CMAKE_PREFIX_PATH /opt/homebrew /usr/local)
 endif()
@@ -109,52 +109,6 @@ if(NOT SDL3_ttf_FOUND)
     endif()
 endif()
 
-# ── FFTW double-precision (fftw3) ─────────────────────────────────────────────
-# Required system dependency on all platforms.  FFTW's own CMake build has
-# known codelet-compilation issues on several architectures (notably Apple
-# Silicon), so we do not attempt a source build.
-#
-# Install instructions:
-#   macOS (Homebrew):  brew install fftw
-#   Debian / Ubuntu:   sudo apt install libfftw3-dev
-#   Arch Linux:        sudo pacman -S fftw
-#   Windows (MSYS2):   pacman -S mingw-w64-ucrt-x86_64-fftw
-find_library(FFTW3_LIB NAMES fftw3 fftw3-3
-    HINTS
-        "$ENV{MSYSTEM_PREFIX}/lib"   # MSYS2
-        /opt/homebrew/lib            # Homebrew on Apple Silicon
-        /usr/local/lib               # Homebrew on Intel Mac / manual installs
-        /usr/lib)
-find_path(FFTW3_INCLUDE_DIR NAMES fftw3.h
-    HINTS
-        "$ENV{MSYSTEM_PREFIX}/include"
-        /opt/homebrew/include
-        /usr/local/include
-        /usr/include)
-
-if(NOT FFTW3_LIB OR NOT FFTW3_INCLUDE_DIR)
-    if(APPLE)
-        message(FATAL_ERROR
-            "FFTW3 not found.\n"
-            "Install it with Homebrew and re-run cmake:\n"
-            "  brew install fftw")
-    elseif(UNIX)
-        message(FATAL_ERROR
-            "FFTW3 not found.\n"
-            "Install it with your package manager and re-run cmake:\n"
-            "  Debian/Ubuntu: sudo apt install libfftw3-dev\n"
-            "  Arch Linux:    sudo pacman -S fftw")
-    else()
-        message(FATAL_ERROR
-            "FFTW3 not found.\n"
-            "Install it in an MSYS2 UCRT64 shell and re-run cmake:\n"
-            "  pacman -S mingw-w64-ucrt-x86_64-fftw")
-    endif()
-endif()
-
-set(FFTW3_TARGET  "${FFTW3_LIB}")
-set(FFTW3_INCLUDE "${FFTW3_INCLUDE_DIR}")
-
 # ── Executable ────────────────────────────────────────────────────────────────
 add_executable(csplayer
     src/main.c
@@ -164,7 +118,7 @@ add_executable(csplayer
     src/playlist.c
     src/ui.c)
 
-target_include_directories(csplayer PRIVATE src ${FFTW3_INCLUDE})
+target_include_directories(csplayer PRIVATE src)
 
 # ── Compiler flags ────────────────────────────────────────────────────────────
 # MinGW GCC on Windows does not ship libasan, so -fsanitize=address will fail
@@ -200,7 +154,6 @@ target_link_libraries(csplayer PRIVATE
     SDL3::SDL3
     SDL3_mixer::SDL3_mixer
     SDL3_ttf::SDL3_ttf
-    ${FFTW3_TARGET}
     ${MATH_LIB})
 
 # ── Unifont (GNU Unicode bitmap font for track title display) ─────────────────

@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <complex.h>
 
 /* ── Integer / float aliases ─────────────────────────────────────────────── */
 typedef  int8_t   i8;
@@ -27,6 +28,10 @@ typedef  uint32_t u32;
 typedef  uint64_t u64;
 typedef  float    f32;
 typedef  double   f64;
+
+/* ── Complex aliases ─────────────────────────────────────────────────────── */
+typedef  float  complex c32;
+typedef  double complex c64;
 
 /* ── Application metadata ────────────────────────────────────────────────── */
 #define CSPLAYER_APP_NAME    "csplayer"

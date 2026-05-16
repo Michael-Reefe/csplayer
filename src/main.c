@@ -3,7 +3,7 @@
  *
  * Uses the SDL3 callback model (SDL_MAIN_USE_CALLBACKS).  The single global
  * app_t instance owns all module state; no heap allocation is used (NASA
- * Rule 3) except for FFTW plan creation in fft_init().
+ * Rule 3).
  *
  * Event flow:
  *   SDL_AppInit     → initialise all modules, load saved playlist.

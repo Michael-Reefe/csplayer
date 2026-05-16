@@ -5,7 +5,7 @@ A lightweight audio player program that shows you the spectrum of your audio in 
 ### Building from source
 
 csplayer is built with CMake (3.26+). The build system will automatically
-download and compile SDL3, SDL3\_mixer, SDL3\_ttf, and FFTW3 from source if they are not
+download and compile SDL3, SDL3\_mixer, and SDL3\_ttf from source if they are not
 found as system packages, so the only hard prerequisites are a C17 compiler,
 CMake, and a build tool (Ninja or Make).
 
@@ -19,10 +19,9 @@ CMake, and a build tool (Ninja or Make).
              mingw-w64-ucrt-x86_64-ninja \
              mingw-w64-ucrt-x86_64-sdl3 \
              mingw-w64-ucrt-x86_64-sdl3-mixer \
-             mingw-w64-ucrt-x86_64-sdl3-ttf \
-             mingw-w64-ucrt-x86_64-fftw
+             mingw-w64-ucrt-x86_64-sdl3-ttf
    ```
-   The SDL3 and FFTW packages are optional — CMake will fetch them from source
+   The SDL3 packages are optional — CMake will fetch them from source
    if they are absent — but installing them saves significant build time.
 3. Configure and build:
    ```sh
@@ -59,7 +58,7 @@ cmake --build build
 
 1. Install [Homebrew](https://brew.sh/), then:
    ```sh
-   brew install cmake ninja fftw sdl3 sdl3_mixer sdl3_ttf
+   brew install cmake ninja sdl3 sdl3_mixer sdl3_ttf
    ```
 2. Configure and build:
    ```sh
@@ -75,7 +74,7 @@ cmake --build build
 
 1. Install dependencies:
    ```sh
-   sudo apt install build-essential cmake ninja-build libfftw3-dev libsdl3-dev
+   sudo apt install build-essential cmake ninja-build libsdl3-dev
    ```
    SDL3\_mixer and SDL3\_ttf do not yet have widely-available apt packages;
    CMake will fetch and build them automatically (including FreeType, which
@@ -94,7 +93,7 @@ cmake --build build
 
 1. Install dependencies:
    ```sh
-   sudo pacman -S gcc cmake ninja sdl3 fftw
+   sudo pacman -S gcc cmake ninja sdl3
    ```
    As with Debian, SDL3\_mixer will be fetched automatically if absent.
 2. Configure and build:
