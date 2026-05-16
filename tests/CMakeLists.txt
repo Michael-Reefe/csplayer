@@ -22,11 +22,10 @@ else()
 endif()
 
 if(NOT WIN32)
-    target_link_libraries(csplayer_tests PRIVATE
-        SDL3::SDL3 SDL3_mixer::SDL3_mixer SDL3_ttf::SDL3_ttf m)
-else()
-    target_link_libraries(csplayer_tests PRIVATE
-        SDL3::SDL3 SDL3_mixer::SDL3_mixer SDL3_ttf::SDL3_ttf)
+    set(MATH_LIB m)
 endif()
+target_link_libraries(csplayer_tests PRIVATE
+    SDL3::SDL3-static SDL3_mixer::SDL3_mixer-static SDL3_ttf::SDL3_ttf-static
+    ${MATH_LIB})
 
 add_test(NAME csplayer_tests COMMAND csplayer_tests)

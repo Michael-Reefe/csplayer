@@ -12,17 +12,14 @@ hard prerequisites are a C17 compiler, CMake, and a build tool (Ninja or Make).
 #### Windows — MSYS2 / UCRT64 (recommended)
 
 1. Install [MSYS2](https://www.msys2.org/) and open an **UCRT64** shell.
-2. Install the toolchain and optional system libraries:
+2. Install the toolchain:
    ```sh
    pacman -S mingw-w64-ucrt-x86_64-gcc \
              mingw-w64-ucrt-x86_64-cmake \
-             mingw-w64-ucrt-x86_64-ninja \
-             mingw-w64-ucrt-x86_64-sdl3 \
-             mingw-w64-ucrt-x86_64-sdl3-mixer \
-             mingw-w64-ucrt-x86_64-sdl3-ttf
+             mingw-w64-ucrt-x86_64-ninja
    ```
-   The SDL3 packages are optional — CMake will fetch them from source
-   if they are absent — but installing them saves significant build time.
+   SDL3, SDL3\_mixer, and SDL3\_ttf are fetched and built from source
+   automatically (static libraries — no pacman SDL packages needed).
 3. Configure and build:
    ```sh
    cmake -S . -B build -G Ninja
@@ -58,8 +55,10 @@ cmake --build build
 
 1. Install [Homebrew](https://brew.sh/), then:
    ```sh
-   brew install cmake ninja sdl3 sdl3_mixer sdl3_ttf
+   brew install cmake ninja
    ```
+   SDL3, SDL3\_mixer, and SDL3\_ttf are fetched and built from source automatically
+   (static libraries — no Homebrew SDL packages needed).
 2. Configure and build:
    ```sh
    cmake -S . -B build -G Ninja
@@ -97,10 +96,10 @@ cmake --build build
 cd build && cpack -G ZIP
 ```
 
-This produces `csplayer-<version>-win64.zip` containing `csplayer.exe` and the
-three required SDL DLLs (`SDL3.dll`, `SDL3_mixer.dll`, `SDL3_ttf.dll`) plus
-`unifont.otf`.  The zip can be extracted anywhere and run without installing
-anything.
+This produces `csplayer-<version>-win64.zip` containing just `csplayer.exe`
+and `unifont.otf`.  SDL3, SDL3_mixer, and SDL3_ttf are statically linked, so
+there are no DLL dependencies.  The zip can be extracted anywhere and run
+without installing anything.
 
 #### macOS — DMG
 
@@ -111,8 +110,8 @@ cd build && cpack -G DragNDrop
 ```
 
 This produces a `csplayer-<version>-Darwin.dmg` containing a self-contained
-`csplayer.app` bundle with all dylib dependencies embedded (via CMake's
-`BundleUtilities/fixup_bundle`).
+`csplayer.app` bundle.  SDL3, SDL3\_mixer, and SDL3\_ttf are statically linked,
+so the app has no external dylib dependencies.
 
 ---
 
