@@ -11,6 +11,10 @@
 #include <stdio.h>
 #include <assert.h>
 
+#ifdef CSPLAYER_TESTING
+#include "test_mocks.h"
+#endif
+
 /* ── Layout helpers ──────────────────────────────────────────────────────── */
 
 /* Volume slider geometry (between the 3 transport buttons and the seek bar). */

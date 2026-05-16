@@ -4,10 +4,10 @@ A lightweight audio player program that shows you the spectrum of your audio in 
 
 ### Building from source
 
-csplayer is built with CMake (3.26+). The build system will automatically
-download and compile SDL3, SDL3\_mixer, and SDL3\_ttf from source if they are not
-found as system packages, so the only hard prerequisites are a C17 compiler,
-CMake, and a build tool (Ninja or Make).
+csplayer is built with CMake (3.26+) and targets **Windows and macOS only**.
+The build system will automatically download and compile SDL3, SDL3\_mixer, and
+SDL3\_ttf from source if they are not found as system packages, so the only
+hard prerequisites are a C17 compiler, CMake, and a build tool (Ninja or Make).
 
 #### Windows — MSYS2 / UCRT64 (recommended)
 
@@ -70,45 +70,59 @@ cmake --build build
    ./build/csplayer
    ```
 
-#### Linux — Debian / Ubuntu
+### Running the tests
 
-1. Install dependencies:
-   ```sh
-   sudo apt install build-essential cmake ninja-build libsdl3-dev
-   ```
-   SDL3\_mixer and SDL3\_ttf do not yet have widely-available apt packages;
-   CMake will fetch and build them automatically (including FreeType, which
-   SDL3\_ttf vendors when built from source).
-2. Configure and build:
-   ```sh
-   cmake -S . -B build -G Ninja
-   cmake --build build
-   ```
-3. Run:
-   ```sh
-   ./build/csplayer
-   ```
+The test suite covers all six source modules with ~150 unit and integration
+tests.  Enable it at configure time with `-DENABLE_TESTS=ON`:
 
-#### Linux — Arch Linux
+```sh
+cmake -S . -B build -G Ninja -DENABLE_TESTS=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
 
-1. Install dependencies:
-   ```sh
-   sudo pacman -S gcc cmake ninja sdl3
-   ```
-   As with Debian, SDL3\_mixer will be fetched automatically if absent.
-2. Configure and build:
-   ```sh
-   cmake -S . -B build -G Ninja
-   cmake --build build
-   ```
+Tests run without real audio hardware: the audio integration tests use SDL's
+built-in `dummy` driver and the draw tests use an offscreen renderer.  Exit
+code is non-zero if any test fails, making this suitable for CI.
+
+### Building a packaged binary
+
+#### Windows — ZIP
+
+After a normal build, run CPack from inside the build directory:
+
+```sh
+cmake -S . -B build -G Ninja
+cmake --build build
+cd build && cpack -G ZIP
+```
+
+This produces `csplayer-<version>-win64.zip` containing `csplayer.exe` and the
+three required SDL DLLs (`SDL3.dll`, `SDL3_mixer.dll`, `SDL3_ttf.dll`) plus
+`unifont.otf`.  The zip can be extracted anywhere and run without installing
+anything.
+
+#### macOS — DMG
+
+```sh
+cmake -S . -B build -G Ninja
+cmake --build build
+cd build && cpack -G DragNDrop
+```
+
+This produces a `csplayer-<version>-Darwin.dmg` containing a self-contained
+`csplayer.app` bundle with all dylib dependencies embedded (via CMake's
+`BundleUtilities/fixup_bundle`).
+
+---
 
 #### AddressSanitizer build
 
-ASan is supported on Linux/macOS (GCC or Clang) and on Windows with MSVC
+ASan is supported on macOS (GCC or Clang) and on Windows with MSVC
 (VS 2019 16.9+). **MinGW GCC on Windows does not ship `libasan`** — CMake
 will reject `-DENABLE_ASAN=ON` with a clear error if you try.
 
-**Linux / macOS:**
+**macOS:**
 ```sh
 cmake -S . -B build-asan -G Ninja -DENABLE_ASAN=ON
 cmake --build build-asan

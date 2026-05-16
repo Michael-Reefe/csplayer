@@ -9,6 +9,10 @@
 #include <SDL3/SDL.h>
 #include <assert.h>
 
+#ifdef CSPLAYER_TESTING
+#include "test_mocks.h"
+#endif
+
 /* ── Internal callbacks (file-scope, not exported) ───────────────────────── */
 
 /*
