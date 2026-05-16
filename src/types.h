@@ -35,7 +35,7 @@ typedef  double complex c64;
 
 /* ── Application metadata ────────────────────────────────────────────────── */
 #define CSPLAYER_APP_NAME    "csplayer"
-#define CSPLAYER_APP_VERSION "0.1.0"
+#define CSPLAYER_APP_VERSION "0.1.1"
 #define CSPLAYER_APP_ID      "com.csplayer.csplayer"
 #define CSPLAYER_ORG         "csplayer"
 

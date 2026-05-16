@@ -179,13 +179,20 @@ static void load_current_track(app_t *app)
     /* Update spectrum LUT for the new file's sample rate. */
     spectrum_init_lut(&app->spectrum, app->audio.sample_rate);
 
-    /* Store duration back into the playlist entry for the UI. */
+    /* Store duration back into the playlist entry for the UI.
+     * If this is the first time we know the duration, persist it so it appears
+     * immediately on the next launch without reloading the file. */
     if (app->playlist.current >= 0) {
         f32 sr = app->audio.sample_rate;
         i64 df = app->audio.duration_frames;
         if (sr > 0.0f && df > 0) {
+            bool was_unknown =
+                (app->playlist.entries[app->playlist.current].duration_sec <= 0.0);
             app->playlist.entries[app->playlist.current].duration_sec =
                 (f64)df / (f64)sr;
+            if (was_unknown) {
+                (void)playlist_save(&app->playlist);
+            }
         }
     }
 }

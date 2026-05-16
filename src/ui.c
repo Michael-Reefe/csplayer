@@ -217,15 +217,21 @@ static void draw_spectrum_axes(SDL_Renderer *r)
     /* Bottom X-axis line */
     (void)SDL_RenderLine(r, (f32)SPEC_X, (f32)(SPEC_Y + SPEC_H),
                             (f32)(SPEC_X + SPEC_W), (f32)(SPEC_Y + SPEC_H));
+    /* Right border */
+    (void)SDL_RenderLine(r, (f32)(SPEC_X + SPEC_W), (f32)SPEC_Y,
+                            (f32)(SPEC_X + SPEC_W), (f32)(SPEC_Y + SPEC_H));
 
-    /* dB horizontal grid lines + labels */
+    /* dB labels + grid lines — only the top (0 dB) and bottom (-90 dB)
+     * edges get a full-width horizontal line; the middle two are label-only. */
     for (i32 t = 0; t < NUM_DB_TICKS; t++) {
         assert(t < NUM_DB_TICKS);
         i32 py = db_to_py(db_ticks[t]);
 
-        set_col(r, COL_AXIS);
-        (void)SDL_RenderLine(r, (f32)SPEC_X, (f32)py,
-                                (f32)(SPEC_X + SPEC_W), (f32)py);
+        if (t == 0 || t == NUM_DB_TICKS - 1) {
+            set_col(r, COL_AXIS);
+            (void)SDL_RenderLine(r, (f32)SPEC_X, (f32)py,
+                                    (f32)(SPEC_X + SPEC_W), (f32)py);
+        }
 
         /* Label to the left of the axis, vertically centred on the line. */
         i32 llen = (i32)SDL_strlen(db_labels[t]);
@@ -237,18 +243,17 @@ static void draw_spectrum_axes(SDL_Renderer *r)
         (void)SDL_RenderDebugText(r, lx, ly, db_labels[t]);
     }
 
-    /* Frequency tick marks + labels below the X axis */
+    /* Frequency tick marks + labels inside the bottom of the plot.
+     * Ticks point upward from the bottom edge; labels sit just above them. */
     for (i32 t = 0; t < NUM_FREQ_TICKS; t++) {
         assert(t < NUM_FREQ_TICKS);
         i32 px = freq_to_px(freq_ticks[t]);
         if (px < 0) { continue; }
 
-        /* Short vertical tick at the bottom of the plot */
         set_col(r, COL_AXIS);
-        (void)SDL_RenderLine(r, (f32)px, (f32)(SPEC_Y + SPEC_H),
-                                (f32)px, (f32)(SPEC_Y + SPEC_H + 3));
+        (void)SDL_RenderLine(r, (f32)px, (f32)(SPEC_Y + SPEC_H - 3),
+                                (f32)px, (f32)(SPEC_Y + SPEC_H));
 
-        /* Label centred below the tick */
         i32 llen = (i32)SDL_strlen(freq_labels[t]);
         f32 lx   = (f32)(px - llen * FONT_W / 2);
         f32 ly   = (f32)(SPEC_Y + SPEC_H + 4);
@@ -382,7 +387,9 @@ static void draw_playlist_row(SDL_Renderer *r, const playlist_t *pl,
     i32 track_x = PL_ADD_X + PL_ADD_SZ + 2;
     i32 x_ind   = track_x;
     i32 x_num   = track_x + FONT_W + 2;
-    i32 x_title = x_num   + 2 * FONT_W + 2;
+    /* PLAYLIST_MAX is 256 (3 digits), so reserve 3 character widths.
+     * Using 2 caused numbers ≥ 100 to overlap the title. */
+    i32 x_title = x_num   + 3 * FONT_W + 2;
 
     i32 ry = PL_Y + row * PL_ROW;
     i32 ty = ry + (PL_ROW - FONT_H) / 2;
@@ -405,18 +412,28 @@ static void draw_playlist_row(SDL_Renderer *r, const playlist_t *pl,
     set_col(r, COL_DIM);
     (void)SDL_RenderDebugText(r, (f32)x_num, (f32)ty, numbuf);
 
-    /* Title: clip to the row area so long names don't overflow the delete button. */
-    SDL_Rect title_clip = { x_title, ry, PL_DEL_X - x_title - 4, PL_ROW };
-    (void)SDL_SetRenderClipRect(r, &title_clip);
-    render_utf8(r, ui->font, pl->entries[idx].title,
-                (f32)x_title, (f32)ty, COL_TEXT);
-    (void)SDL_SetRenderClipRect(r, NULL);
-
+    /* Pre-compute duration text so the title clip can reserve space for it. */
+    char tbuf[12];
+    i32  tlen = 0;
     if (pl->entries[idx].duration_sec > 0.0) {
-        char tbuf[12];
         fmt_time(tbuf, sizeof(tbuf), pl->entries[idx].duration_sec);
-        i32 tlen = (i32)SDL_strlen(tbuf);
-        f32 tx   = (f32)(PL_DEL_X - tlen * FONT_W - 4);
+        tlen = (i32)SDL_strlen(tbuf);
+    }
+
+    /* Title clips to stop before the duration string (4 px gap on each side)
+     * or before the delete button when no duration is shown. */
+    i32 clip_right = (tlen > 0) ? PL_DEL_X - tlen * FONT_W - 8 : PL_DEL_X - 4;
+    i32 clip_w     = clip_right - x_title;
+    if (clip_w > 0) {
+        SDL_Rect title_clip = { x_title, ry, clip_w, PL_ROW };
+        (void)SDL_SetRenderClipRect(r, &title_clip);
+        render_utf8(r, ui->font, pl->entries[idx].title,
+                    (f32)x_title, (f32)ty, COL_TEXT);
+        (void)SDL_SetRenderClipRect(r, NULL);
+    }
+
+    if (tlen > 0) {
+        f32 tx = (f32)(PL_DEL_X - tlen * FONT_W - 4);
         set_col(r, COL_DIM);
         (void)SDL_RenderDebugText(r, tx, (f32)ty, tbuf);
     }

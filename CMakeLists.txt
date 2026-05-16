@@ -151,12 +151,25 @@ if(NOT EXISTS "${UNIFONT_OTF}")
 endif()
 
 if(EXISTS "${UNIFONT_OTF}")
-    add_custom_command(TARGET csplayer POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${UNIFONT_OTF}"
-            "$<TARGET_FILE_DIR:csplayer>/unifont.otf"
-        VERBATIM
-        COMMENT "Copying unifont.otf next to executable")
+    if(APPLE)
+        # On macOS, SDL_GetBasePath() returns Contents/Resources/ for a .app bundle.
+        # Copy there so init_font can find it at runtime.
+        add_custom_command(TARGET csplayer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:csplayer>/../Resources"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${UNIFONT_OTF}"
+                "$<TARGET_FILE_DIR:csplayer>/../Resources/unifont.otf"
+            VERBATIM
+            COMMENT "Copying unifont.otf to app bundle Resources")
+    else()
+        add_custom_command(TARGET csplayer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${UNIFONT_OTF}"
+                "$<TARGET_FILE_DIR:csplayer>/unifont.otf"
+            VERBATIM
+            COMMENT "Copying unifont.otf next to executable")
+    endif()
 endif()
 
 
@@ -178,12 +191,12 @@ elseif(APPLE)
     install(TARGETS csplayer BUNDLE DESTINATION .)
     if(EXISTS "${CMAKE_BINARY_DIR}/unifont.otf")
         install(FILES "${CMAKE_BINARY_DIR}/unifont.otf"
-                DESTINATION csplayer.app/Contents/MacOS)
+                DESTINATION csplayer.app/Contents/Resources)
     endif()
 endif()
 
 set(CPACK_PACKAGE_NAME                "csplayer")
-set(CPACK_PACKAGE_VERSION             "0.1.0")
+set(CPACK_PACKAGE_VERSION             "0.1.1")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Lightweight audio player with real-time spectrum analyser")
 set(CPACK_STRIP_FILES                 TRUE)
 if(WIN32)

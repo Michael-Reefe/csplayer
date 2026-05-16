@@ -3,7 +3,10 @@
  *
  * Persistence format (plain text, UTF-8):
  *   Line 1: current track index (integer, -1 if none)
- *   Lines 2+: one absolute file path per line
+ *   Lines 2+: path<TAB>duration_seconds  (duration 0.000 if unknown)
+ *
+ * Files written by older versions (path only, no TAB) are read back with
+ * duration 0 — backward compatible.
  *
  * Copyright (C) 2026 Michael Reefe.  Licensed under GPL-3.0.
  */
@@ -133,9 +136,16 @@ bool playlist_load(playlist_t *pl)
         if (len == 0) {
             continue;
         }
+        /* Split on the first TAB to read the optional saved duration. */
+        f64   dur = 0.0;
+        char *tab = SDL_strchr(line, '\t');
+        if (tab != NULL) {
+            *tab = '\0';
+            dur  = SDL_strtod(tab + 1, NULL);
+        }
         SDL_strlcpy(pl->entries[loaded].path,  line, (size_t)PATH_MAX_LEN);
         path_to_title(line, pl->entries[loaded].title);
-        pl->entries[loaded].duration_sec = 0.0;
+        pl->entries[loaded].duration_sec = dur;
         loaded++;
     }
     fclose(f);
@@ -170,7 +180,7 @@ bool playlist_save(const playlist_t *pl)
     assert(limit >= 0 && limit <= PLAYLIST_MAX);
 
     for (i32 i = 0; i < limit; i++) {
-        fprintf(f, "%s\n", pl->entries[i].path);
+        fprintf(f, "%s\t%.3f\n", pl->entries[i].path, pl->entries[i].duration_sec);
     }
     fclose(f);
     return true;
