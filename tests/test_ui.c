@@ -53,6 +53,7 @@
 
 static SDL_Window   *g_window   = NULL;
 static SDL_Renderer *g_renderer = NULL;
+static synth_t       g_synth;          /* zeroed; font=NULL → silence */
 
 /* ── Helpers: synthesise minimal SDL event structs ───────────────────────── */
 
@@ -152,7 +153,7 @@ static void test_ui_mouse_down_non_left(void)
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
     SDL_MouseButtonEvent e = make_btn(10.0f, 270.0f, SDL_BUTTON_RIGHT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl) == UI_ACTION_NONE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_NONE);
     TEST_END();
 }
 
@@ -163,7 +164,7 @@ static void test_ui_mouse_down_rewind_btn(void)
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
     SDL_MouseButtonEvent e = make_btn(10.0f, 270.0f, SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl) == UI_ACTION_REWIND);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_REWIND);
     TEST_END();
 }
 
@@ -174,7 +175,7 @@ static void test_ui_mouse_down_play_btn(void)
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
     SDL_MouseButtonEvent e = make_btn(30.0f, 270.0f, SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl) == UI_ACTION_PLAY_PAUSE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_PLAY_PAUSE);
     TEST_END();
 }
 
@@ -185,7 +186,7 @@ static void test_ui_mouse_down_next_btn(void)
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
     SDL_MouseButtonEvent e = make_btn(55.0f, 270.0f, SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl) == UI_ACTION_NEXT);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_NEXT);
     TEST_END();
 }
 
@@ -198,7 +199,7 @@ static void test_ui_mouse_down_add_open(void)
     playlist_t pl = make_pl(0, -1);
     /* Click inside the [+] button area with dialog not yet open. */
     SDL_MouseButtonEvent e = make_btn(5.0f, 200.0f, SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl) == UI_ACTION_OPEN_DIALOG);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_OPEN_DIALOG);
     TEST_END();
 }
 
@@ -211,7 +212,7 @@ static void test_ui_mouse_down_add_blocked(void)
     playlist_t pl = make_pl(0, -1);   /* empty playlist so no row click */
     SDL_MouseButtonEvent e = make_btn(5.0f, 200.0f, SDL_BUTTON_LEFT);
     /* dialog_open=true → add button check fails; no rows → NONE */
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl) == UI_ACTION_NONE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_NONE);
     TEST_END();
 }
 
@@ -223,7 +224,7 @@ static void test_ui_mouse_down_vol_slider(void)
     playlist_t pl = make_pl(0, -1);
     /* x=85 is inside vol slider [VOL_X=72, VOL_X+VOL_W=108). */
     SDL_MouseButtonEvent e = make_btn(85.0f, (f32)T_VOL_Y + 2.0f, SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
     CHECK(act == UI_ACTION_SET_VOLUME);
     CHECK(ui.vol_dragging);
     CHECK(ui.vol_pos > 0.0f && ui.vol_pos < 1.0f);
@@ -240,7 +241,7 @@ static void test_ui_mouse_down_vol_clamp_lo(void)
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
     SDL_MouseButtonEvent e = make_btn((f32)T_VOL_X, (f32)T_VOL_Y + 2.0f, SDL_BUTTON_LEFT);
-    ui_on_mouse_down(&ui, &e, &a, &pl);
+    ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
     CHECK(ui.vol_pos >= 0.0f);
     TEST_END();
 }
@@ -252,7 +253,7 @@ static void test_ui_mouse_down_seek_bar(void)
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
     SDL_MouseButtonEvent e = make_btn(200.0f, (f32)T_SEEK_Y + 2.0f, SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
     CHECK(act == UI_ACTION_SEEK);
     CHECK(ui.scrubbing);
     CHECK(ui.scrub_pos > 0.0f && ui.scrub_pos < 1.0f);
@@ -268,7 +269,7 @@ static void test_ui_mouse_down_scrollbar(void)
     playlist_t pl = make_pl(8, 0);
     /* x=508 is in [PL_SB_X=507, 512), y=210 is in [PL_Y=194, 258). */
     SDL_MouseButtonEvent e = make_btn(508.0f, 210.0f, SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
     CHECK(act == UI_ACTION_NONE);
     CHECK(ui.sb_dragging);
     TEST_END();
@@ -282,7 +283,7 @@ static void test_ui_mouse_down_scrollbar_nospace(void)
     /* count=3 <= visible=4 → max_scroll<=0 → sb_pos_to_scroll returns 0 */
     playlist_t pl = make_pl(3, 0);
     SDL_MouseButtonEvent e = make_btn(508.0f, 210.0f, SDL_BUTTON_LEFT);
-    ui_on_mouse_down(&ui, &e, &a, &pl);
+    ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
     CHECK(pl.scroll == 0);
     TEST_END();
 }
@@ -295,7 +296,7 @@ static void test_ui_mouse_down_pl_delete(void)
     playlist_t pl = make_pl(2, 0);
     /* x=494 is in delete column [493, 505), y=200 maps to row 0. */
     SDL_MouseButtonEvent e = make_btn(494.0f, 200.0f, SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
     CHECK(act == UI_ACTION_PL_REMOVE);
     CHECK(ui.pl_hover == 0);
     TEST_END();
@@ -309,7 +310,7 @@ static void test_ui_mouse_down_pl_row(void)
     playlist_t pl = make_pl(2, 0);
     /* x=100 is in title area (not delete col), y=200 maps to row 0. */
     SDL_MouseButtonEvent e = make_btn(100.0f, 200.0f, SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
     CHECK(act == UI_ACTION_PL_SELECT);
     CHECK(ui.pl_hover == 0);
     TEST_END();
@@ -323,7 +324,7 @@ static void test_ui_mouse_down_nowhere(void)
     playlist_t pl = make_pl(0, -1);
     /* Click in the header area — no region matches. */
     SDL_MouseButtonEvent e = make_btn(200.0f, 5.0f, SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl) == UI_ACTION_NONE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_NONE);
     TEST_END();
 }
 
@@ -573,7 +574,7 @@ static void test_ui_scroll_vol_up(void)
     ui.vol_pos = 0.5f;
     playlist_t pl = make_pl(0, -1);
     ui_action_t act = ui_on_scroll(&ui, (f32)T_VOL_X + 5.0f,
-                                    (f32)T_VOL_Y + 2.0f, 1.0f, 0.0f, &pl);
+                                    (f32)T_VOL_Y + 2.0f, 1.0f, 0.0f, &pl, APP_MODE_PLAYER);
     CHECK(act == UI_ACTION_SET_VOLUME);
     CHECK(ui.vol_pos > 0.5f);
     TEST_END();
@@ -587,7 +588,7 @@ static void test_ui_scroll_vol_down_clamp(void)
     playlist_t pl = make_pl(0, -1);
     /* dy=-1 → vol_pos -= 0.05 → negative → clamped to 0 */
     ui_on_scroll(&ui, (f32)T_VOL_X + 5.0f, (f32)T_VOL_Y + 2.0f,
-                 -1.0f, 0.0f, &pl);
+                 -1.0f, 0.0f, &pl, APP_MODE_PLAYER);
     CHECK(ui.vol_pos == 0.0f);
     TEST_END();
 }
@@ -600,7 +601,7 @@ static void test_ui_scroll_vol_up_clamp(void)
     playlist_t pl = make_pl(0, -1);
     /* dy=1 → vol_pos += 0.05 → > 1 → clamped to 1 */
     ui_on_scroll(&ui, (f32)T_VOL_X + 5.0f, (f32)T_VOL_Y + 2.0f,
-                 1.0f, 0.0f, &pl);
+                 1.0f, 0.0f, &pl, APP_MODE_PLAYER);
     CHECK(ui.vol_pos == 1.0f);
     TEST_END();
 }
@@ -611,7 +612,7 @@ static void test_ui_scroll_seek(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     playlist_t pl = make_pl(0, -1);
     ui_action_t act = ui_on_scroll(&ui, (f32)T_SEEK_X + 10.0f,
-                                    (f32)T_SEEK_Y + 2.0f, 1.0f, 0.5f, &pl);
+                                    (f32)T_SEEK_Y + 2.0f, 1.0f, 0.5f, &pl, APP_MODE_PLAYER);
     CHECK(act == UI_ACTION_SEEK);
     CHECK(ui.scrub_pos > 0.5f);
     TEST_END();
@@ -624,7 +625,7 @@ static void test_ui_scroll_seek_clamp_hi(void)
     playlist_t pl = make_pl(0, -1);
     /* current_seek_pos=1.0 + dy=1 → scrub_pos > 1 → clamped */
     ui_on_scroll(&ui, (f32)T_SEEK_X + 10.0f, (f32)T_SEEK_Y + 2.0f,
-                 1.0f, 1.0f, &pl);
+                 1.0f, 1.0f, &pl, APP_MODE_PLAYER);
     CHECK(ui.scrub_pos == 1.0f);
     TEST_END();
 }
@@ -636,7 +637,7 @@ static void test_ui_scroll_seek_clamp_lo(void)
     playlist_t pl = make_pl(0, -1);
     /* current_seek_pos=0.0 + dy=-1 → scrub_pos < 0 → clamped */
     ui_on_scroll(&ui, (f32)T_SEEK_X + 10.0f, (f32)T_SEEK_Y + 2.0f,
-                 -1.0f, 0.0f, &pl);
+                 -1.0f, 0.0f, &pl, APP_MODE_PLAYER);
     CHECK(ui.scrub_pos == 0.0f);
     TEST_END();
 }
@@ -648,10 +649,10 @@ static void test_ui_scroll_playlist(void)
     playlist_t pl = make_pl(8, 0);
     pl.scroll = 2;
     /* dy=1 → scroll -= 1 = 1 */
-    ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, 1.0f, 0.5f, &pl);
+    ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, 1.0f, 0.5f, &pl, APP_MODE_PLAYER);
     CHECK(pl.scroll == 1);
     /* dy=-1 → scroll += 1 = 2 */
-    ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, -1.0f, 0.5f, &pl);
+    ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, -1.0f, 0.5f, &pl, APP_MODE_PLAYER);
     CHECK(pl.scroll == 2);
     TEST_END();
 }
@@ -663,10 +664,10 @@ static void test_ui_scroll_playlist_clamp(void)
     playlist_t pl = make_pl(8, 0);
     pl.scroll = 0;
     /* dy=10 → scroll -= 10 = -10 → clamped to 0 */
-    ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, 10.0f, 0.5f, &pl);
+    ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, 10.0f, 0.5f, &pl, APP_MODE_PLAYER);
     CHECK(pl.scroll == 0);
     /* dy=-10 → scroll += 10 = 10 → clamped to max_scroll=4 */
-    ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, -10.0f, 0.5f, &pl);
+    ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, -10.0f, 0.5f, &pl, APP_MODE_PLAYER);
     CHECK(pl.scroll == 4);
     TEST_END();
 }
@@ -678,7 +679,7 @@ static void test_ui_scroll_playlist_nospace(void)
     /* count=3 <= visible=4 → max_scroll<=0 → no scroll change */
     playlist_t pl = make_pl(3, 0);
     pl.scroll = 0;
-    ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, -1.0f, 0.5f, &pl);
+    ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, -1.0f, 0.5f, &pl, APP_MODE_PLAYER);
     CHECK(pl.scroll == 0);
     TEST_END();
 }
@@ -689,7 +690,7 @@ static void test_ui_scroll_none(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     playlist_t pl = make_pl(0, -1);
     /* Click in the header — no region matches → NONE */
-    ui_action_t act = ui_on_scroll(&ui, 100.0f, 5.0f, 1.0f, 0.5f, &pl);
+    ui_action_t act = ui_on_scroll(&ui, 100.0f, 5.0f, 1.0f, 0.5f, &pl, APP_MODE_PLAYER);
     CHECK(act == UI_ACTION_NONE);
     TEST_END();
 }
@@ -728,7 +729,7 @@ static void test_ui_draw_status_playing(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -739,7 +740,7 @@ static void test_ui_draw_status_paused(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -750,7 +751,7 @@ static void test_ui_draw_status_stopped(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -763,7 +764,7 @@ static void test_ui_draw_scrubbing(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.scrubbing  = true;
     ui.scrub_pos  = 0.5f;
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -778,7 +779,7 @@ static void test_ui_draw_vol_clamp_lo(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     /* vol_pos < 0 → vfill < 0 → clamped to 0 */
     ui.vol_pos = -0.1f;
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -790,7 +791,7 @@ static void test_ui_draw_vol_clamp_hi(void)
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.vol_pos = 1.1f;
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -803,7 +804,7 @@ static void test_ui_draw_seek_clamp_lo(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.scrubbing = true;
     ui.scrub_pos = -0.1f;
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -816,7 +817,7 @@ static void test_ui_draw_seek_clamp_hi(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.scrubbing = true;
     ui.scrub_pos = 1.1f;
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -829,7 +830,7 @@ static void test_ui_draw_no_current_track(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(0, -1);   /* current=-1 → no title branch */
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -840,7 +841,7 @@ static void test_ui_draw_with_current_track(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(2, 0);   /* current=0 → title + clip branch */
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -853,7 +854,7 @@ static void test_ui_draw_empty_playlist(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -864,7 +865,7 @@ static void test_ui_draw_full_playlist(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(8, 0);   /* count>visible → scrollbar drawn */
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -876,7 +877,7 @@ static void test_ui_draw_thumb_min(void)
     /* very large count → thumb_h < 4 → clamped to 4 */
     playlist_t pl = make_pl(PLAYLIST_MAX, 0);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -889,7 +890,7 @@ static void test_ui_draw_hover_row(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     /* pl_hover=1, current=0 → hover highlight branch (idx==hover && idx!=current) */
     ui.pl_hover = 1;
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -900,7 +901,7 @@ static void test_ui_draw_current_row(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(3, 1);   /* current=1 → ">" indicator branch */
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -913,7 +914,7 @@ static void test_ui_draw_hover_equals_current(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     /* pl_hover==current → first if true, second if false */
     ui.pl_hover = 0;
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -925,7 +926,7 @@ static void test_ui_draw_duration_positive(void)
     playlist_t pl = make_pl(1, 0);
     pl.entries[0].duration_sec = 90.0;   /* > 0 → duration rendered */
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -937,7 +938,7 @@ static void test_ui_draw_duration_zero(void)
     playlist_t pl = make_pl(1, 0);
     pl.entries[0].duration_sec = 0.0;   /* <= 0 → no duration rendered */
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -949,7 +950,7 @@ static void test_ui_draw_dialog_open(void)
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.dialog_open = true;   /* add button drawn hot */
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -964,7 +965,7 @@ static void test_ui_draw_empty_string(void)
     playlist_t pl = make_pl(1, 0);
     pl.entries[0].title[0] = '\0';
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -976,7 +977,7 @@ static void test_ui_draw_font_null(void)
     playlist_t pl = make_pl(1, 0);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.font = NULL;   /* → SDL_RenderDebugText fallback */
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
     TEST_END();
 }
 
@@ -999,7 +1000,7 @@ static void test_ui_draw_ttf_render_fail(void)
 
     /* Mock makes TTF_RenderText_Solid return NULL → render_utf8 silently skips. */
     g_mock_TTF_RenderText_Solid_fail = true;
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
 
     TTF_CloseFont(font);
     TEST_END();
@@ -1023,7 +1024,7 @@ static void test_ui_draw_ttf_texture_fail(void)
 
     /* Mock makes SDL_CreateTextureFromSurface return NULL → silent skip. */
     g_mock_SDL_CreateTextureFromSurface_fail = true;
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
 
     TTF_CloseFont(font);
     TEST_END();
@@ -1044,9 +1045,205 @@ static void test_ui_draw_font_valid(void)
     playlist_t pl = make_pl(1, 0);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.font = font;
-    ui_draw(g_renderer, &a, &s, &pl, &ui);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
 
     TTF_CloseFont(font);
+    TEST_END();
+}
+
+/* ── Synth mode input-handler tests ─────────────────────────────────────── */
+
+static void test_ui_mode_toggle_click(void)
+{
+    TEST_BEGIN("ui_mode_toggle_click");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    /* Click inside mode button (MODE_BTN_X=70, y=10 inside h=16 range). */
+    SDL_MouseButtonEvent e = make_btn(75.0f, 10.0f, SDL_BUTTON_LEFT);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_MODE_TOGGLE);
+    TEST_END();
+}
+
+static void test_ui_synth_inst_row_click(void)
+{
+    TEST_BEGIN("ui_synth_inst_row_click");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    /* Synth inst row: y in [PL_Y, PL_Y+16) = [194, 210). */
+    SDL_MouseButtonEvent e = make_btn(100.0f, (f32)(PL_Y + 4), SDL_BUTTON_LEFT);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_SYNTH_INST_UP);
+    TEST_END();
+}
+
+static void test_ui_synth_note_row_click(void)
+{
+    TEST_BEGIN("ui_synth_note_row_click");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    /* Synth note row: y in [PL_Y+16, PL_Y+32) = [210, 226). */
+    SDL_MouseButtonEvent e = make_btn(100.0f, (f32)(PL_Y + 18), SDL_BUTTON_LEFT);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_SYNTH_NOTE_UP);
+    TEST_END();
+}
+
+static void test_ui_synth_hold_mouse_down(void)
+{
+    TEST_BEGIN("ui_synth_hold_mouse_down");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    /* HOLD button: y in [PL_Y+32, PL_Y+PL_H) = [226, 258). */
+    SDL_MouseButtonEvent e = make_btn(100.0f, (f32)(PL_Y + 40), SDL_BUTTON_LEFT);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_SYNTH_PLAY_START);
+    TEST_END();
+}
+
+static void test_ui_synth_hold_mouse_up_playing(void)
+{
+    TEST_BEGIN("ui_synth_hold_mouse_up_playing");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.synth_playing = true;
+    SDL_MouseButtonEvent e = make_btn(100.0f, 234.0f, SDL_BUTTON_LEFT);
+    CHECK(ui_on_mouse_up(&ui, &e) == UI_ACTION_SYNTH_PLAY_STOP);
+    TEST_END();
+}
+
+static void test_ui_synth_hold_mouse_up_not_playing(void)
+{
+    TEST_BEGIN("ui_synth_hold_mouse_up_not_playing");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.synth_playing = false;
+    SDL_MouseButtonEvent e = make_btn(100.0f, 234.0f, SDL_BUTTON_LEFT);
+    CHECK(ui_on_mouse_up(&ui, &e) == UI_ACTION_NONE);
+    TEST_END();
+}
+
+static void test_ui_synth_scroll_inst_up(void)
+{
+    TEST_BEGIN("ui_synth_scroll_inst_up");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    playlist_t pl = make_pl(0, -1);
+    ui_action_t act = ui_on_scroll(&ui, 100.0f, (f32)(PL_Y + 4),
+                                    1.0f, 0.0f, &pl, APP_MODE_SYNTH);
+    CHECK(act == UI_ACTION_SYNTH_INST_UP);
+    TEST_END();
+}
+
+static void test_ui_synth_scroll_inst_down(void)
+{
+    TEST_BEGIN("ui_synth_scroll_inst_down");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    playlist_t pl = make_pl(0, -1);
+    ui_action_t act = ui_on_scroll(&ui, 100.0f, (f32)(PL_Y + 4),
+                                    -1.0f, 0.0f, &pl, APP_MODE_SYNTH);
+    CHECK(act == UI_ACTION_SYNTH_INST_DOWN);
+    TEST_END();
+}
+
+static void test_ui_synth_scroll_note_up(void)
+{
+    TEST_BEGIN("ui_synth_scroll_note_up");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    playlist_t pl = make_pl(0, -1);
+    ui_action_t act = ui_on_scroll(&ui, 100.0f, (f32)(PL_Y + 18),
+                                    1.0f, 0.0f, &pl, APP_MODE_SYNTH);
+    CHECK(act == UI_ACTION_SYNTH_NOTE_UP);
+    TEST_END();
+}
+
+static void test_ui_synth_scroll_note_down(void)
+{
+    TEST_BEGIN("ui_synth_scroll_note_down");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    playlist_t pl = make_pl(0, -1);
+    ui_action_t act = ui_on_scroll(&ui, 100.0f, (f32)(PL_Y + 18),
+                                    -1.0f, 0.0f, &pl, APP_MODE_SYNTH);
+    CHECK(act == UI_ACTION_SYNTH_NOTE_DOWN);
+    TEST_END();
+}
+
+static void test_ui_synth_scroll_hold_none(void)
+{
+    TEST_BEGIN("ui_synth_scroll_hold_none");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    playlist_t pl = make_pl(0, -1);
+    /* Scroll over HOLD button area (y=PL_Y+40) in SYNTH mode → NONE */
+    ui_action_t act = ui_on_scroll(&ui, 100.0f, (f32)(PL_Y + 40),
+                                    1.0f, 0.0f, &pl, APP_MODE_SYNTH);
+    CHECK(act == UI_ACTION_NONE);
+    TEST_END();
+}
+
+/* ── Synth mode draw smoke tests ─────────────────────────────────────────── */
+
+static void test_ui_draw_mode_btn_synth(void)
+{
+    TEST_BEGIN("ui_draw_mode_btn_synth");
+    audio_t a    = make_draw_audio(AUDIO_STATUS_STOPPED);
+    spectrum_t s = make_flat_spectrum();
+    playlist_t pl = make_pl(0, -1);
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    /* mode=SYNTH → "SYN" label on mode button, synth panel shown */
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    TEST_END();
+}
+
+static void test_ui_draw_synth_playing(void)
+{
+    TEST_BEGIN("ui_draw_synth_playing");
+    audio_t a    = make_draw_audio(AUDIO_STATUS_PLAYING);
+    spectrum_t s = make_flat_spectrum();
+    playlist_t pl = make_pl(0, -1);
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.synth_playing = true;   /* HOLD button drawn hot */
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    TEST_END();
+}
+
+static void test_ui_draw_synth_not_playing(void)
+{
+    TEST_BEGIN("ui_draw_synth_not_playing");
+    audio_t a    = make_draw_audio(AUDIO_STATUS_STOPPED);
+    spectrum_t s = make_flat_spectrum();
+    playlist_t pl = make_pl(0, -1);
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.synth_playing = false;  /* HOLD button drawn normal */
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    TEST_END();
+}
+
+static void test_ui_draw_synth_all_instruments(void)
+{
+    TEST_BEGIN("ui_draw_synth_all_instruments");
+    audio_t a    = make_draw_audio(AUDIO_STATUS_STOPPED);
+    spectrum_t s = make_flat_spectrum();
+    playlist_t pl = make_pl(0, -1);
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    /* Spot-check representative instruments — no crash. */
+    i32 insts[] = {0, 63, 127};
+    for (i32 i = 0; i < 3; i++) {
+        ui.synth_inst = insts[i];
+        ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    }
+    TEST_END();
+}
+
+static void test_ui_draw_synth_all_notes(void)
+{
+    TEST_BEGIN("ui_draw_synth_all_notes");
+    audio_t a    = make_draw_audio(AUDIO_STATUS_STOPPED);
+    spectrum_t s = make_flat_spectrum();
+    playlist_t pl = make_pl(0, -1);
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    /* Spot-check note extremes and middle — no crash. */
+    i32 notes[] = {0, 64, 127};
+    for (i32 i = 0; i < 3; i++) {
+        ui.synth_note = notes[i];
+        ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    }
     TEST_END();
 }
 
@@ -1087,6 +1284,7 @@ void run_ui_tests(void)
     test_ui_mouse_down_rewind_btn();
     test_ui_mouse_down_play_btn();
     test_ui_mouse_down_next_btn();
+    test_ui_mode_toggle_click();
     test_ui_mouse_down_add_open();
     test_ui_mouse_down_add_blocked();
     test_ui_mouse_down_vol_slider();
@@ -1097,6 +1295,16 @@ void run_ui_tests(void)
     test_ui_mouse_down_pl_delete();
     test_ui_mouse_down_pl_row();
     test_ui_mouse_down_nowhere();
+    test_ui_synth_inst_row_click();
+    test_ui_synth_note_row_click();
+    test_ui_synth_hold_mouse_down();
+    test_ui_synth_hold_mouse_up_playing();
+    test_ui_synth_hold_mouse_up_not_playing();
+    test_ui_synth_scroll_inst_up();
+    test_ui_synth_scroll_inst_down();
+    test_ui_synth_scroll_note_up();
+    test_ui_synth_scroll_note_down();
+    test_ui_synth_scroll_hold_none();
     test_ui_mouse_motion_hover();
     test_ui_mouse_motion_hover_oob();
     test_ui_mouse_motion_sb_held();
@@ -1153,6 +1361,11 @@ void run_ui_tests(void)
         test_ui_draw_ttf_render_fail();
         test_ui_draw_ttf_texture_fail();
         test_ui_draw_font_valid();
+        test_ui_draw_mode_btn_synth();
+        test_ui_draw_synth_playing();
+        test_ui_draw_synth_not_playing();
+        test_ui_draw_synth_all_instruments();
+        test_ui_draw_synth_all_notes();
     }
 
     TTF_Quit();

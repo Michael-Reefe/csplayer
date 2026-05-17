@@ -344,6 +344,78 @@ void audio_snapshot_ring(audio_t *a, f32 *dst)
     SDL_UnlockMutex(a->ring_mutex);
 }
 
+bool audio_load_raw(audio_t *a, const f32 *buf, i32 nframes, f32 sample_rate)
+{
+    assert(a           != NULL);
+    assert(buf         != NULL);
+    assert(nframes     > 0);
+    assert(a->mixer    != NULL);
+    assert(a->track    != NULL);
+
+    unload_audio(a);
+
+    SDL_AudioSpec spec;
+    SDL_memset(&spec, 0, sizeof(spec));
+    spec.format   = SDL_AUDIO_F32;
+    spec.channels = 1;
+    spec.freq     = (int)sample_rate;
+
+    a->audio = MIX_LoadRawAudioNoCopy(a->mixer, buf, (size_t)nframes * sizeof(f32), &spec, false);
+    if (a->audio == NULL) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "audio_load_raw: MIX_LoadRawAudioNoCopy failed: %s",
+                     SDL_GetError());
+        return false;
+    }
+
+    a->duration_frames = nframes;
+    a->sample_rate     = sample_rate;
+    a->channels        = 1;
+
+    if (!MIX_SetTrackAudio(a->track, a->audio)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "audio_load_raw: MIX_SetTrackAudio failed: %s", SDL_GetError());
+        MIX_DestroyAudio(a->audio);
+        a->audio = NULL;
+        return false;
+    }
+
+    if (!MIX_SetTrackRawCallback(a->track, raw_audio_cb, a)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "audio_load_raw: MIX_SetTrackRawCallback failed: %s", SDL_GetError());
+        MIX_DestroyAudio(a->audio);
+        a->audio = NULL;
+        return false;
+    }
+
+    return true;
+}
+
+bool audio_play_looped(audio_t *a)
+{
+    assert(a        != NULL);
+    assert(a->track != NULL);
+    assert(a->audio != NULL);
+
+    SDL_PropertiesID props = SDL_CreateProperties();
+    if (props == 0) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "audio_play_looped: SDL_CreateProperties failed: %s", SDL_GetError());
+        return false;
+    }
+    SDL_SetNumberProperty(props, MIX_PROP_PLAY_LOOPS_NUMBER, -1);
+    bool ok = MIX_PlayTrack(a->track, props);
+    SDL_DestroyProperties(props);
+
+    if (!ok) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "audio_play_looped: MIX_PlayTrack failed: %s", SDL_GetError());
+        return false;
+    }
+    a->status = AUDIO_STATUS_PLAYING;
+    return true;
+}
+
 void audio_unload(audio_t *a)
 {
     assert(a != NULL);

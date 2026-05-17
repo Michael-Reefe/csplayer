@@ -37,6 +37,8 @@ extern bool g_mock_MIX_GetTrackPlaybackPosition_neg;   /* return -1 */
 extern bool g_mock_MIX_GetTrackPlaybackPosition_over;  /* return duration+1 */
 extern bool g_mock_TTF_RenderText_Solid_fail;
 extern bool g_mock_SDL_CreateTextureFromSurface_fail;
+extern bool g_mock_MIX_LoadRawAudioNoCopy_fail;
+extern bool g_mock_MIX_SetTrackRawCallback_fail;
 
 /* ── Stub declarations ───────────────────────────────────────────────────── */
 
@@ -64,6 +66,14 @@ SDL_Surface      *csp_mock_TTF_RenderText_Solid(TTF_Font *font,
                                                  SDL_Color fg);
 SDL_Texture      *csp_mock_SDL_CreateTextureFromSurface(SDL_Renderer *renderer,
                                                          SDL_Surface *surface);
+MIX_Audio        *csp_mock_MIX_LoadRawAudioNoCopy(MIX_Mixer *mixer,
+                                                   const void *data,
+                                                   size_t datalen,
+                                                   const SDL_AudioSpec *spec,
+                                                   bool free_when_done);
+bool              csp_mock_MIX_SetTrackRawCallback(MIX_Track *track,
+                                                    MIX_TrackMixCallback cb,
+                                                    void *userdata);
 
 /* ── Macro redirections ──────────────────────────────────────────────────── */
 
@@ -82,5 +92,7 @@ SDL_Texture      *csp_mock_SDL_CreateTextureFromSurface(SDL_Renderer *renderer,
 #define MIX_GetTrackPlaybackPosition     csp_mock_MIX_GetTrackPlaybackPosition
 #define TTF_RenderText_Solid             csp_mock_TTF_RenderText_Solid
 #define SDL_CreateTextureFromSurface     csp_mock_SDL_CreateTextureFromSurface
+#define MIX_LoadRawAudioNoCopy           csp_mock_MIX_LoadRawAudioNoCopy
+#define MIX_SetTrackRawCallback          csp_mock_MIX_SetTrackRawCallback
 
 #endif /* CSPLAYER_TEST_MOCKS_H */

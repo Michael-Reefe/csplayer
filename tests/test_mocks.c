@@ -31,6 +31,8 @@ bool g_mock_MIX_GetTrackPlaybackPosition_neg     = false;
 bool g_mock_MIX_GetTrackPlaybackPosition_over    = false;
 bool g_mock_TTF_RenderText_Solid_fail            = false;
 bool g_mock_SDL_CreateTextureFromSurface_fail    = false;
+bool g_mock_MIX_LoadRawAudioNoCopy_fail          = false;
+bool g_mock_MIX_SetTrackRawCallback_fail         = false;
 
 /* ── Stub implementations ────────────────────────────────────────────────── */
 
@@ -176,4 +178,26 @@ SDL_Texture *csp_mock_SDL_CreateTextureFromSurface(SDL_Renderer *renderer,
         return NULL;
     }
     return SDL_CreateTextureFromSurface(renderer, surface);
+}
+
+MIX_Audio *csp_mock_MIX_LoadRawAudioNoCopy(MIX_Mixer *mixer, const void *data,
+                                             size_t datalen,
+                                             const SDL_AudioSpec *spec,
+                                             bool free_when_done)
+{
+    if (g_mock_MIX_LoadRawAudioNoCopy_fail) {
+        g_mock_MIX_LoadRawAudioNoCopy_fail = false;
+        return NULL;
+    }
+    return MIX_LoadRawAudioNoCopy(mixer, data, datalen, spec, free_when_done);
+}
+
+bool csp_mock_MIX_SetTrackRawCallback(MIX_Track *track,
+                                       MIX_TrackMixCallback cb, void *userdata)
+{
+    if (g_mock_MIX_SetTrackRawCallback_fail) {
+        g_mock_MIX_SetTrackRawCallback_fail = false;
+        return false;
+    }
+    return MIX_SetTrackRawCallback(track, cb, userdata);
 }

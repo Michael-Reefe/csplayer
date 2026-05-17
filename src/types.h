@@ -100,6 +100,19 @@ typedef  double complex c64;
  * VOL_DB_MIN (slider pos 0) to 0 dB (slider pos 1). */
 #define VOL_DB_MIN  (-60.0f)
 
+/* ── Application mode ────────────────────────────────────────────────────── */
+typedef enum {
+    APP_MODE_PLAYER = 0,
+    APP_MODE_SYNTH  = 1,
+} app_mode_t;
+
+/* ── Synthesizer ─────────────────────────────────────────────────────────── */
+#define SYNTH_SAMPLE_RATE  44100
+/* 1-second sustain buffer, looped while HOLD button is held (~176 KB in BSS). */
+#define SYNTH_MAX_FRAMES   SYNTH_SAMPLE_RATE
+#define SYNTH_INSTRUMENTS  128   /* all General MIDI programs 0–127 */
+#define SYNTH_NOTES        128   /* MIDI note range 0–127           */
+
 /* ── Playlist ────────────────────────────────────────────────────────────── */
 #define PLAYLIST_MAX    256   /* maximum number of tracks      */
 #define PATH_MAX_LEN    512   /* maximum file path (bytes)     */

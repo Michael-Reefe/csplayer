@@ -41,6 +41,12 @@
 #define FONT_W  8
 #define FONT_H  8
 
+/* Mode toggle button in the header bar (immediately right of the app name). */
+#define MODE_BTN_X  70
+#define MODE_BTN_Y  2
+#define MODE_BTN_W  24
+#define MODE_BTN_H  16
+
 /* ── Internal: colour helpers ────────────────────────────────────────────── */
 
 static void set_col(SDL_Renderer *r, i32 rv, i32 gv, i32 bv, i32 av)
@@ -154,7 +160,7 @@ static i32 db_to_py(f32 db)
  */
 static void draw_header(SDL_Renderer *r,
                          const audio_t *audio, const playlist_t *pl,
-                         const ui_t *ui)
+                         const ui_t *ui, app_mode_t mode)
 {
     assert(r     != NULL);
     assert(audio != NULL);
@@ -169,6 +175,19 @@ static void draw_header(SDL_Renderer *r,
     set_col(r, COL_NOW);
     (void)SDL_RenderDebugText(r, 4.0f, (f32)(HDR_Y + 6), CSPLAYER_APP_NAME);
 
+    /* Mode toggle button */
+    set_col(r, COL_BTN);
+    fill_rect(r, (f32)MODE_BTN_X, (f32)MODE_BTN_Y, (f32)MODE_BTN_W, (f32)MODE_BTN_H);
+    set_col(r, COL_BORDER);
+    outline_rect(r, (f32)MODE_BTN_X, (f32)MODE_BTN_Y, (f32)MODE_BTN_W, (f32)MODE_BTN_H);
+    {
+        const char *mode_label = (mode == APP_MODE_PLAYER) ? "PLY" : "SYN";
+        f32 mlx = (f32)(MODE_BTN_X + (MODE_BTN_W - 3 * FONT_W) / 2);
+        f32 mly = (f32)(MODE_BTN_Y + (MODE_BTN_H - FONT_H) / 2);
+        set_col(r, COL_TEXT);
+        (void)SDL_RenderDebugText(r, mlx, mly, mode_label);
+    }
+
     /* Compute time string first so we know its pixel width. */
     f32 pos_frac = audio_get_pos(audio);
     f64 dur_sec  = (audio->duration_frames > 0 && audio->sample_rate > 0.0f)
@@ -182,14 +201,15 @@ static void draw_header(SDL_Renderer *r,
     i32 tlen = (i32)SDL_strlen(timebuf);
     f32 tx   = (f32)(LOG_W - tlen * FONT_W - 4);
 
-    /* Track title — clip to the gap between app name and time display. */
+    /* Track title — clip to the gap between mode button and time display. */
     if (pl->current >= 0 && pl->current < pl->count) {
-        i32 clip_w = (i32)tx - 72 - 4;
+        i32 title_x = MODE_BTN_X + MODE_BTN_W + 4;
+        i32 clip_w  = (i32)tx - title_x - 4;
         if (clip_w > 0) {
-            SDL_Rect clip = { 72, HDR_Y, clip_w, HDR_H };
+            SDL_Rect clip = { title_x, HDR_Y, clip_w, HDR_H };
             (void)SDL_SetRenderClipRect(r, &clip);
             render_utf8(r, ui->font, pl->entries[pl->current].title,
-                        72.0f, (f32)(HDR_Y + 6), COL_TEXT);
+                        (f32)title_x, (f32)(HDR_Y + 6), COL_TEXT);
             (void)SDL_SetRenderClipRect(r, NULL);
         }
     }
@@ -510,19 +530,87 @@ static void draw_playlist(SDL_Renderer *r, const playlist_t *pl, const ui_t *ui)
     (void)SDL_RenderDebugText(r, lx, ly, "+");
 }
 
+/*
+ * Draw the synthesiser panel (instrument name, note name, HOLD TO PLAY button).
+ * Occupies the same pixel region as the playlist panel.
+ */
+static void draw_synth_panel(SDL_Renderer *r, const ui_t *ui, const synth_t *synth)
+{
+    assert(r     != NULL);
+    assert(ui    != NULL);
+    assert(synth != NULL);
+
+    /* Background + top/bottom borders */
+    set_col(r, COL_PANEL);
+    fill_rect(r, 0.0f, (f32)PL_Y, (f32)LOG_W, (f32)PL_H);
+    set_col(r, COL_BORDER);
+    (void)SDL_RenderLine(r, 0.0f, (f32)PL_Y, (f32)LOG_W, (f32)PL_Y);
+    (void)SDL_RenderLine(r, 0.0f, (f32)(PL_Y + PL_H), (f32)LOG_W, (f32)(PL_Y + PL_H));
+
+    /* Row 0: instrument name */
+    {
+        char inst_name[64];
+        char label[80];
+        synth_instrument_name(ui->synth_inst, inst_name, (i32)sizeof(inst_name));
+        SDL_snprintf(label, sizeof(label), "INST: %s", inst_name);
+        i32 ty = PL_Y + (16 - FONT_H) / 2;
+        SDL_Rect clip = { 4, PL_Y, LOG_W - 8, 16 };
+        (void)SDL_SetRenderClipRect(r, &clip);
+        set_col(r, COL_TEXT);
+        (void)SDL_RenderDebugText(r, 4.0f, (f32)ty, label);
+        (void)SDL_SetRenderClipRect(r, NULL);
+    }
+
+    set_col(r, COL_BORDER);
+    (void)SDL_RenderLine(r, 0.0f, (f32)(PL_Y + 16), (f32)LOG_W, (f32)(PL_Y + 16));
+
+    /* Row 1: note name */
+    {
+        char note_name[8];
+        char label[24];
+        synth_note_name(ui->synth_note, note_name, (i32)sizeof(note_name));
+        SDL_snprintf(label, sizeof(label), "NOTE: %s", note_name);
+        i32 ty = PL_Y + 16 + (16 - FONT_H) / 2;
+        set_col(r, COL_TEXT);
+        (void)SDL_RenderDebugText(r, 4.0f, (f32)ty, label);
+    }
+
+    set_col(r, COL_BORDER);
+    (void)SDL_RenderLine(r, 0.0f, (f32)(PL_Y + 32), (f32)LOG_W, (f32)(PL_Y + 32));
+
+    /* Row 2: HOLD TO PLAY button */
+    {
+        i32 hold_y = PL_Y + 32;
+        i32 hold_h = PL_H - 32;
+        if (ui->synth_playing) { set_col(r, COL_BTN_HOT); } else { set_col(r, COL_BTN); }
+        fill_rect(r, 4.0f, (f32)hold_y, (f32)(LOG_W - 8), (f32)hold_h);
+        set_col(r, COL_BORDER);
+        outline_rect(r, 4.0f, (f32)hold_y, (f32)(LOG_W - 8), (f32)hold_h);
+        const char *hold_label = "HOLD TO PLAY";
+        i32 hlen = (i32)SDL_strlen(hold_label);
+        f32 hlx  = (f32)((LOG_W - hlen * FONT_W) / 2);
+        f32 hly  = (f32)(hold_y + (hold_h - FONT_H) / 2);
+        set_col(r, COL_TEXT);
+        (void)SDL_RenderDebugText(r, hlx, hly, hold_label);
+    }
+}
+
 /* ── Public interface ────────────────────────────────────────────────────── */
 
-void ui_draw(SDL_Renderer *r,
-             const audio_t    *audio,
-             const spectrum_t *spectrum,
-             const playlist_t *playlist,
-             ui_t             *ui)
+void ui_draw(SDL_Renderer       *r,
+             const audio_t      *audio,
+             const spectrum_t   *spectrum,
+             const playlist_t   *playlist,
+             ui_t               *ui,
+             app_mode_t          mode,
+             const synth_t      *synth)
 {
     assert(r        != NULL);
     assert(audio    != NULL);
     assert(spectrum != NULL);
     assert(playlist != NULL);
     assert(ui       != NULL);
+    assert(synth    != NULL);
 
     (void)SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
 
@@ -530,10 +618,16 @@ void ui_draw(SDL_Renderer *r,
     set_col(r, COL_BG);
     (void)SDL_RenderClear(r);
 
-    draw_header(r, audio, playlist, ui);
+    draw_header(r, audio, playlist, ui, mode);
     draw_spectrum_axes(r);
     draw_spectrum_line(r, spectrum);
-    draw_playlist(r, playlist, ui);
+
+    if (mode == APP_MODE_SYNTH) {
+        draw_synth_panel(r, ui, synth);
+    } else {
+        draw_playlist(r, playlist, ui);
+    }
+
     draw_controls(r, audio, ui);
 
     (void)SDL_RenderPresent(r);
@@ -605,6 +699,32 @@ static bool in_add_button(f32 lx, f32 ly)
             ly >= (f32)(PL_Y + 1) && ly < (f32)(PL_Y + 1 + PL_ADD_SZ));
 }
 
+/* ── Synth panel hit tests ───────────────────────────────────────────────── */
+
+static bool in_mode_btn(f32 lx, f32 ly)
+{
+    return (lx >= (f32)MODE_BTN_X && lx < (f32)(MODE_BTN_X + MODE_BTN_W) &&
+            ly >= (f32)MODE_BTN_Y && ly < (f32)(MODE_BTN_Y + MODE_BTN_H));
+}
+
+static bool in_synth_inst_row(f32 lx, f32 ly)
+{
+    (void)lx;
+    return (ly >= (f32)PL_Y && ly < (f32)(PL_Y + 16));
+}
+
+static bool in_synth_note_row(f32 lx, f32 ly)
+{
+    (void)lx;
+    return (ly >= (f32)(PL_Y + 16) && ly < (f32)(PL_Y + 32));
+}
+
+static bool in_synth_hold_btn(f32 lx, f32 ly)
+{
+    return (lx >= 4.0f && lx < (f32)(LOG_W - 4) &&
+            ly >= (f32)(PL_Y + 32) && ly < (f32)(PL_Y + PL_H));
+}
+
 /*
  * Return the playlist row index under (lx, ly), or -1 if none.
  */
@@ -622,7 +742,8 @@ static i32 pl_row_at(f32 lx, f32 ly, const playlist_t *pl)
 }
 
 ui_action_t ui_on_mouse_down(ui_t *ui, const SDL_MouseButtonEvent *e,
-                              const audio_t *audio, playlist_t *pl)
+                              const audio_t *audio, playlist_t *pl,
+                              app_mode_t mode)
 {
     assert(ui    != NULL);
     assert(e     != NULL);
@@ -634,14 +755,15 @@ ui_action_t ui_on_mouse_down(ui_t *ui, const SDL_MouseButtonEvent *e,
     f32 lx = e->x;
     f32 ly = e->y;
 
+    /* Mode toggle — active in both modes. */
+    if (in_mode_btn(lx, ly)) { return UI_ACTION_MODE_TOGGLE; }
+
+    /* Transport buttons — active in both modes. */
     if (in_button(0, lx, ly)) { return UI_ACTION_REWIND;     }
     if (in_button(1, lx, ly)) { return UI_ACTION_PLAY_PAUSE; }
     if (in_button(2, lx, ly)) { return UI_ACTION_NEXT;       }
 
-    if (in_add_button(lx, ly) && !ui->dialog_open) {
-        return UI_ACTION_OPEN_DIALOG;
-    }
-
+    /* Volume and seek bar — active in both modes. */
     if (in_vol_slider(lx, ly)) {
         ui->vol_dragging = true;
         ui->vol_pos      = (lx - (f32)VOL_X) / (f32)VOL_W;
@@ -656,6 +778,18 @@ ui_action_t ui_on_mouse_down(ui_t *ui, const SDL_MouseButtonEvent *e,
         if (ui->scrub_pos < 0.0f) { ui->scrub_pos = 0.0f; }
         if (ui->scrub_pos > 1.0f) { ui->scrub_pos = 1.0f; }
         return UI_ACTION_SEEK;
+    }
+
+    if (mode == APP_MODE_SYNTH) {
+        if (in_synth_inst_row(lx, ly)) { return UI_ACTION_SYNTH_INST_UP;    }
+        if (in_synth_note_row(lx, ly)) { return UI_ACTION_SYNTH_NOTE_UP;    }
+        if (in_synth_hold_btn(lx, ly)) { return UI_ACTION_SYNTH_PLAY_START; }
+        return UI_ACTION_NONE;
+    }
+
+    /* Player mode — playlist panel input. */
+    if (in_add_button(lx, ly) && !ui->dialog_open) {
+        return UI_ACTION_OPEN_DIALOG;
     }
 
     if (in_pl_sb(lx, ly)) {
@@ -724,6 +858,9 @@ ui_action_t ui_on_mouse_up(ui_t *ui, const SDL_MouseButtonEvent *e)
 
     if (e->button != SDL_BUTTON_LEFT) { return UI_ACTION_NONE; }
 
+    /* Synth hold-to-play: any left-button release stops the note. */
+    if (ui->synth_playing) { return UI_ACTION_SYNTH_PLAY_STOP; }
+
     if (ui->sb_dragging) {
         ui->sb_dragging = false;
         return UI_ACTION_NONE;
@@ -763,7 +900,8 @@ ui_action_t ui_on_key(const SDL_KeyboardEvent *e)
 }
 
 ui_action_t ui_on_scroll(ui_t *ui, f32 lx, f32 ly, f32 dy,
-                          f32 current_seek_pos, playlist_t *pl)
+                          f32 current_seek_pos, playlist_t *pl,
+                          app_mode_t mode)
 {
     assert(ui != NULL);
     assert(pl != NULL);
@@ -782,7 +920,18 @@ ui_action_t ui_on_scroll(ui_t *ui, f32 lx, f32 ly, f32 dy,
         return UI_ACTION_SEEK;
     }
 
-    /* Scroll the playlist (positive dy = scroll up = earlier tracks). */
+    /* Synth panel: scroll over inst/note rows changes selection. */
+    if (mode == APP_MODE_SYNTH) {
+        if (in_synth_inst_row(lx, ly)) {
+            return (dy > 0.0f) ? UI_ACTION_SYNTH_INST_UP : UI_ACTION_SYNTH_INST_DOWN;
+        }
+        if (in_synth_note_row(lx, ly)) {
+            return (dy > 0.0f) ? UI_ACTION_SYNTH_NOTE_UP : UI_ACTION_SYNTH_NOTE_DOWN;
+        }
+        return UI_ACTION_NONE;
+    }
+
+    /* Player mode: scroll the playlist (positive dy = scroll up = earlier tracks). */
     if (ly >= (f32)PL_Y && ly < (f32)(PL_Y + PL_H)) {
         i32 vis        = PL_H / PL_ROW;
         i32 max_scroll = pl->count - vis;

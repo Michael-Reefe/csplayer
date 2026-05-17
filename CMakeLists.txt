@@ -14,6 +14,11 @@ enable_testing()
 # ── Dependency fetching ───────────────────────────────────────────────────────
 include(FetchContent)
 
+# Skip git-fetch on reconfigure when content is already on disk.
+# Without this, any branch-based GIT_TAG (e.g. "master") triggers a network
+# fetch every cmake run, hanging on slow / offline machines.
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
+
 # Build all fetched libraries as static so csplayer.exe is self-contained.
 # SDL3_mixer and SDL3_ttf derive their shared/static choice from BUILD_SHARED_LIBS;
 # SDL3 uses its own SDL_SHARED / SDL_STATIC variables.
@@ -78,6 +83,14 @@ FetchContent_Declare(SDL3_ttf
     GIT_SHALLOW    TRUE)
 FetchContent_MakeAvailable(SDL3_ttf)
 
+# ── TinySoundFont (single-header SF2 renderer, MIT license) ──────────────────
+# Header-only: synth.c defines TSF_IMPLEMENTATION before including tsf.h.
+FetchContent_Declare(TinySoundFont
+    GIT_REPOSITORY https://github.com/schellingb/TinySoundFont.git
+    GIT_TAG        main
+    GIT_SHALLOW    TRUE)
+FetchContent_MakeAvailable(TinySoundFont)
+
 # ── Executable ────────────────────────────────────────────────────────────────
 add_executable(csplayer
     src/main.c
@@ -85,9 +98,10 @@ add_executable(csplayer
     src/fft.c
     src/spectrum.c
     src/playlist.c
-    src/ui.c)
+    src/ui.c
+    src/synth.c)
 
-target_include_directories(csplayer PRIVATE src)
+target_include_directories(csplayer PRIVATE src ${tinysoundfont_SOURCE_DIR})
 
 # ── Compiler flags ────────────────────────────────────────────────────────────
 # MinGW GCC on Windows does not ship libasan, so -fsanitize=address will fail
@@ -126,28 +140,13 @@ target_link_libraries(csplayer PRIVATE
     ${MATH_LIB})
 
 # ── Unifont (GNU Unicode bitmap font for track title display) ─────────────────
-# Downloaded once at configure time; the application falls back to the built-in
-# SDL_RenderDebugText (ASCII only) if the file is absent at runtime.
-set(UNIFONT_OTF "${CMAKE_BINARY_DIR}/unifont.otf")
+# Bundled in assets/unifont.otf; falls back to SDL_RenderDebugText if absent.
+set(UNIFONT_OTF "${CMAKE_SOURCE_DIR}/assets/unifont.otf")
 if(NOT EXISTS "${UNIFONT_OTF}")
-    message(STATUS "Downloading Unifont (~5 MB) for Unicode title display...")
-    file(DOWNLOAD
-        "https://unifoundry.com/pub/unifont/unifont-17.0.04/font-builds/unifont-17.0.04.otf"
-        "${UNIFONT_OTF}"
-        SHOW_PROGRESS
-        STATUS UNIFONT_STATUS
-        TLS_VERIFY ON)
-    list(GET UNIFONT_STATUS 0 UNIFONT_ERR)
-    if(UNIFONT_ERR)
-        list(GET UNIFONT_STATUS 1 UNIFONT_ERR_MSG)
-        message(WARNING
-            "Unifont download failed: ${UNIFONT_ERR_MSG}\n"
-            "Unicode track titles will fall back to the built-in ASCII font.\n"
-            "To enable Unicode: download unifont-17.0.04.otf from\n"
-            "  https://unifoundry.com/unifont/index.html\n"
-            "and copy it as 'unifont.otf' next to the csplayer executable.")
-        file(REMOVE "${UNIFONT_OTF}")
-    endif()
+    message(WARNING
+        "assets/unifont.otf not found.\n"
+        "Unicode track titles will fall back to the built-in ASCII font.\n"
+        "Download unifont-*.otf from https://unifoundry.com/unifont/ and save it as assets/unifont.otf")
 endif()
 
 if(EXISTS "${UNIFONT_OTF}")
@@ -173,6 +172,34 @@ if(EXISTS "${UNIFONT_OTF}")
 endif()
 
 
+# ── GM SoundFont (needed by synth mode) ──────────────────────────────────────
+# Bundled in assets/gm.sf2; synth mode produces silence if absent.
+set(GM_SF2 "${CMAKE_SOURCE_DIR}/assets/gm.sf2")
+if(NOT EXISTS "${GM_SF2}")
+    message(WARNING
+        "assets/gm.sf2 not found.\n"
+        "Synth mode will produce silence until a SoundFont is available.\n"
+        "Copy any GM-compatible .sf2 file to assets/gm.sf2 to enable it.")
+endif()
+
+if(EXISTS "${GM_SF2}")
+    if(APPLE)
+        add_custom_command(TARGET csplayer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GM_SF2}"
+                "$<TARGET_FILE_DIR:csplayer>/../Resources/gm.sf2"
+            VERBATIM
+            COMMENT "Copying gm.sf2 to app bundle Resources")
+    else()
+        add_custom_command(TARGET csplayer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GM_SF2}"
+                "$<TARGET_FILE_DIR:csplayer>/gm.sf2"
+            VERBATIM
+            COMMENT "Copying gm.sf2 next to executable")
+    endif()
+endif()
+
 # ── macOS: .app bundle properties ─────────────────────────────────────────────
 if(APPLE)
     set_target_properties(csplayer PROPERTIES
@@ -184,13 +211,20 @@ endif()
 # ── Installation + packaging (CPack) ─────────────────────────────────────────
 if(WIN32)
     install(TARGETS csplayer DESTINATION .)
-    if(EXISTS "${CMAKE_BINARY_DIR}/unifont.otf")
-        install(FILES "${CMAKE_BINARY_DIR}/unifont.otf" DESTINATION .)
+    if(EXISTS "${UNIFONT_OTF}")
+        install(FILES "${UNIFONT_OTF}" DESTINATION .)
+    endif()
+    if(EXISTS "${GM_SF2}")
+        install(FILES "${GM_SF2}" DESTINATION .)
     endif()
 elseif(APPLE)
     install(TARGETS csplayer BUNDLE DESTINATION .)
-    if(EXISTS "${CMAKE_BINARY_DIR}/unifont.otf")
-        install(FILES "${CMAKE_BINARY_DIR}/unifont.otf"
+    if(EXISTS "${UNIFONT_OTF}")
+        install(FILES "${UNIFONT_OTF}"
+                DESTINATION csplayer.app/Contents/Resources)
+    endif()
+    if(EXISTS "${GM_SF2}")
+        install(FILES "${GM_SF2}"
                 DESTINATION csplayer.app/Contents/Resources)
     endif()
 endif()

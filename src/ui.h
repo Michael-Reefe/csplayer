@@ -25,24 +25,34 @@
 #include "audio.h"
 #include "spectrum.h"
 #include "playlist.h"
+#include "synth.h"
 
 /* ── Action codes returned by input handlers ─────────────────────────────── */
 
 typedef enum {
     UI_ACTION_NONE = 0,
-    UI_ACTION_PLAY_PAUSE,     /* toggle play / pause                    */
-    UI_ACTION_REWIND,         /* seek to position 0                     */
-    UI_ACTION_NEXT,           /* advance to next track                  */
-    UI_ACTION_SEEK,           /* scrub — ui_t.scrub_pos is valid        */
-    UI_ACTION_SET_VOLUME,     /* volume drag — ui_t.vol_pos is valid    */
-    UI_ACTION_OPEN_DIALOG,    /* open the file picker dialog            */
-    UI_ACTION_PL_SELECT,      /* click on a playlist row — ui_t.pl_hover */
-    UI_ACTION_PL_REMOVE,      /* delete button on a row  — ui_t.pl_hover */
+    UI_ACTION_PLAY_PAUSE,        /* toggle play / pause                       */
+    UI_ACTION_REWIND,            /* seek to position 0                        */
+    UI_ACTION_NEXT,              /* advance to next track                     */
+    UI_ACTION_SEEK,              /* scrub — ui_t.scrub_pos is valid           */
+    UI_ACTION_SET_VOLUME,        /* volume drag — ui_t.vol_pos is valid       */
+    UI_ACTION_OPEN_DIALOG,       /* open the file picker dialog               */
+    UI_ACTION_PL_SELECT,         /* click on a playlist row — ui_t.pl_hover  */
+    UI_ACTION_PL_REMOVE,         /* delete button on a row  — ui_t.pl_hover  */
+    /* Synth mode actions */
+    UI_ACTION_MODE_TOGGLE,       /* header mode button — toggle PLAYER ↔ SYNTH */
+    UI_ACTION_SYNTH_INST_UP,     /* instrument +1 (wrap)                      */
+    UI_ACTION_SYNTH_INST_DOWN,   /* instrument -1 (wrap)                      */
+    UI_ACTION_SYNTH_NOTE_UP,     /* MIDI note +1 (clamp at 127)               */
+    UI_ACTION_SYNTH_NOTE_DOWN,   /* MIDI note -1 (clamp at 0)                 */
+    UI_ACTION_SYNTH_PLAY_START,  /* HOLD button mouse-down — begin looped play */
+    UI_ACTION_SYNTH_PLAY_STOP,   /* HOLD button mouse-up   — stop playback    */
 } ui_action_t;
 
 /* ── Module state ────────────────────────────────────────────────────────── */
 
 typedef struct {
+    /* Player mode */
     bool      scrubbing;    /* true while the mouse button is held on the seek bar  */
     f32       scrub_pos;    /* [0, 1] fraction; valid when scrubbing == true         */
     bool      vol_dragging; /* true while the mouse button is held on the vol slider */
@@ -51,6 +61,14 @@ typedef struct {
     bool      sb_dragging;  /* true while dragging the playlist scrollbar            */
     bool      dialog_open;  /* true while a file-picker dialog is pending            */
     TTF_Font *font;         /* Unifont for Unicode titles; NULL = ASCII fallback     */
+    /* Synth mode */
+    i32       synth_inst;       /* displayed instrument [0, SYNTH_INSTRUMENTS) */
+    i32       synth_note;       /* displayed note       [0, SYNTH_NOTES)       */
+    bool      synth_playing;    /* true while HOLD button is held              */
+    bool      synth_inst_open;  /* instrument dropdown visible                 */
+    bool      synth_note_open;  /* note dropdown visible                       */
+    i32       synth_dd_scroll;  /* first row visible in open dropdown          */
+    i32       synth_dd_hover;   /* hovered dropdown row (-1 = none)            */
 } ui_t;
 
 /* ── Public interface ────────────────────────────────────────────────────── */
@@ -58,26 +76,24 @@ typedef struct {
 /*
  * Render one full frame.  Called every SDL_AppIterate tick.
  *
- * The function draws (in order):
- *   1. Background
- *   2. Header bar (title + time)
- *   3. Spectrum axes (dB grid lines, tick labels, frequency labels)
- *   4. Spectrum line
- *   5. Playlist panel
- *   6. Control bar (buttons + seek bar)
+ * When mode == APP_MODE_SYNTH the playlist panel is replaced by the synth
+ * panel; otherwise the playlist is shown as normal.
  */
 void ui_draw(SDL_Renderer       *r,
              const audio_t      *audio,
              const spectrum_t   *spectrum,
              const playlist_t   *playlist,
-             ui_t               *ui);
+             ui_t               *ui,
+             app_mode_t          mode,
+             const synth_t      *synth);
 
 /*
  * Handle a mouse-button-down event.
  * Returns the action triggered (UI_ACTION_NONE if none).
  */
 ui_action_t ui_on_mouse_down(ui_t *ui, const SDL_MouseButtonEvent *e,
-                              const audio_t *audio, playlist_t *pl);
+                              const audio_t *audio, playlist_t *pl,
+                              app_mode_t mode);
 
 /*
  * Handle a mouse-motion event (hover + seek-bar drag + scrollbar drag).
@@ -110,6 +126,7 @@ ui_action_t ui_on_key(const SDL_KeyboardEvent *e);
  * (ui->scrub_pos updated), or UI_ACTION_NONE.
  */
 ui_action_t ui_on_scroll(ui_t *ui, f32 lx, f32 ly, f32 dy,
-                          f32 current_seek_pos, playlist_t *pl);
+                          f32 current_seek_pos, playlist_t *pl,
+                          app_mode_t mode);
 
 #endif /* CSPLAYER_UI_H */

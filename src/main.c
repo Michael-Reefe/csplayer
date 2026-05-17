@@ -33,6 +33,7 @@
 #include "spectrum.h"
 #include "playlist.h"
 #include "ui.h"
+#include "synth.h"
 
 /* ── Application state ───────────────────────────────────────────────────── */
 
@@ -49,6 +50,8 @@ typedef struct {
     spectrum_t spectrum;
     playlist_t playlist;
     ui_t       ui;
+    app_mode_t mode;
+    synth_t    synth;
 
     /* Scratch buffer for the PCM snapshot passed to fft_process. */
     f32 pcm_snapshot[RING_SIZE];
@@ -259,9 +262,24 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
     /* Initialise SDL3_ttf and load Unifont (non-fatal — falls back to ASCII). */
     init_font(&g_app.ui);
 
+    /* Initialise synthesiser — load GM SoundFont from base path (non-fatal). */
+    {
+        const char *base = SDL_GetBasePath();
+        char sf2_path[PATH_MAX_LEN];
+        if (base != NULL) {
+            SDL_snprintf(sf2_path, sizeof(sf2_path), "%sgm.sf2", base);
+        } else {
+            SDL_strlcpy(sf2_path, "gm.sf2", sizeof(sf2_path));
+        }
+        (void)synth_init(&g_app.synth, sf2_path);
+    }
+
     /* UI state starts zeroed (from .bss). */
-    g_app.ui.pl_hover = -1;
-    g_app.ui.vol_pos  = 1.0f;   /* start at full volume (0 dB) */
+    g_app.ui.pl_hover       = -1;
+    g_app.ui.vol_pos        = 1.0f;   /* start at full volume (0 dB) */
+    g_app.ui.synth_inst     = g_app.synth.inst;
+    g_app.ui.synth_note     = g_app.synth.note;
+    g_app.ui.synth_dd_hover = -1;
 
     /* If the saved playlist has a current track, load it (no auto-play). */
     if (g_app.playlist.current >= 0) {
@@ -286,7 +304,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 
     /* Render the frame. */
     ui_draw(app->renderer, &app->audio, &app->spectrum,
-            &app->playlist, &app->ui);
+            &app->playlist, &app->ui, app->mode, &app->synth);
 
     return SDL_APP_CONTINUE;
 }
@@ -355,6 +373,50 @@ static void dispatch_action(app_t *app, ui_action_t action)
         (void)playlist_save(&app->playlist);
         break;
     }
+    case UI_ACTION_MODE_TOGGLE:
+        (void)audio_stop(&app->audio);
+        audio_unload(&app->audio);
+        app->mode = (app->mode == APP_MODE_PLAYER) ? APP_MODE_SYNTH : APP_MODE_PLAYER;
+        app->ui.synth_playing = false;
+        break;
+    case UI_ACTION_SYNTH_INST_UP:
+        app->synth.inst   = (app->synth.inst + 1) % SYNTH_INSTRUMENTS;
+        app->synth.dirty  = true;
+        app->ui.synth_inst = app->synth.inst;
+        break;
+    case UI_ACTION_SYNTH_INST_DOWN:
+        app->synth.inst   = (app->synth.inst + SYNTH_INSTRUMENTS - 1) % SYNTH_INSTRUMENTS;
+        app->synth.dirty  = true;
+        app->ui.synth_inst = app->synth.inst;
+        break;
+    case UI_ACTION_SYNTH_NOTE_UP:
+        if (app->synth.note < SYNTH_NOTES - 1) {
+            app->synth.note++;
+            app->synth.dirty = true;
+        }
+        app->ui.synth_note = app->synth.note;
+        break;
+    case UI_ACTION_SYNTH_NOTE_DOWN:
+        if (app->synth.note > 0) {
+            app->synth.note--;
+            app->synth.dirty = true;
+        }
+        app->ui.synth_note = app->synth.note;
+        break;
+    case UI_ACTION_SYNTH_PLAY_START:
+        (void)audio_stop(&app->audio);
+        if (app->synth.dirty) { synth_build(&app->synth); }
+        if (audio_load_raw(&app->audio, app->synth.buf,
+                           app->synth.buf_frames, (f32)SYNTH_SAMPLE_RATE)) {
+            if (audio_play_looped(&app->audio)) {
+                app->ui.synth_playing = true;
+            }
+        }
+        break;
+    case UI_ACTION_SYNTH_PLAY_STOP:
+        (void)audio_stop(&app->audio);
+        app->ui.synth_playing = false;
+        break;
     default:
         break;
     }
@@ -364,6 +426,9 @@ static void handle_track_done(app_t *app)
 {
     assert(app != NULL);
     assert(app->event_track_done != 0);
+
+    /* In synth mode the looped buffer never ends naturally; ignore stray events. */
+    if (app->mode == APP_MODE_SYNTH) { return; }
 
     i32 next = playlist_next(&app->playlist);
     if (next >= 0) {
@@ -400,7 +465,7 @@ static void handle_mouse_down(app_t *app, SDL_Event *ev)
     (void)SDL_RenderCoordinatesFromWindow(g_app.renderer, btn.x, btn.y,
                                           &btn.x, &btn.y);
     ui_action_t action = ui_on_mouse_down(&app->ui, &btn,
-                                           &app->audio, &app->playlist);
+                                           &app->audio, &app->playlist, app->mode);
     dispatch_action(app, action);
 }
 
@@ -429,12 +494,7 @@ static void handle_mouse_up(app_t *app, SDL_Event *ev)
     SDL_MouseButtonEvent btn = ev->button;
     (void)SDL_RenderCoordinatesFromWindow(g_app.renderer, btn.x, btn.y,
                                           &btn.x, &btn.y);
-    ui_action_t action = ui_on_mouse_up(&app->ui, &btn);
-    if (action == UI_ACTION_SEEK) {
-        (void)audio_seek(&app->audio, app->ui.scrub_pos);
-    } else if (action == UI_ACTION_SET_VOLUME) {
-        audio_set_volume(&app->audio, vol_pos_to_gain(app->ui.vol_pos));
-    }
+    dispatch_action(app, ui_on_mouse_up(&app->ui, &btn));
 }
 
 static void handle_mouse_wheel(app_t *app, SDL_Event *ev)
@@ -446,13 +506,9 @@ static void handle_mouse_wheel(app_t *app, SDL_Event *ev)
     (void)SDL_RenderCoordinatesFromWindow(g_app.renderer,
                                           ev->wheel.mouse_x, ev->wheel.mouse_y,
                                           &lx, &ly);
-    ui_action_t action = ui_on_scroll(&app->ui, lx, ly, ev->wheel.y,
-                                      audio_get_pos(&app->audio), &app->playlist);
-    if (action == UI_ACTION_SET_VOLUME) {
-        audio_set_volume(&app->audio, vol_pos_to_gain(app->ui.vol_pos));
-    } else if (action == UI_ACTION_SEEK) {
-        (void)audio_seek(&app->audio, app->ui.scrub_pos);
-    }
+    dispatch_action(app, ui_on_scroll(&app->ui, lx, ly, ev->wheel.y,
+                                      audio_get_pos(&app->audio), &app->playlist,
+                                      app->mode));
 }
 
 /* ── SDL3 callback: SDL_AppEvent ─────────────────────────────────────────── */
@@ -488,6 +544,7 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result)
     if (app == NULL) { return; }
 
     (void)playlist_save(&app->playlist);
+    synth_quit(&app->synth);
     audio_quit(&app->audio);
     fft_quit  (&app->fft);
     /* spectrum and playlist have no resources to free beyond what we own. */

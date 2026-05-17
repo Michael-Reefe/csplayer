@@ -15,6 +15,7 @@
 #include <SDL3/SDL.h>
 
 #include "harness.h"
+#include "types.h"
 #include "audio.h"
 #include "test_mocks.h"
 
@@ -629,6 +630,122 @@ static void test_audio_track_stopped_event_nonzero(void)
     TEST_END();
 }
 
+/* ---- audio_load_raw ----------------------------------------------------- */
+
+/* A small silent PCM buffer shared by all audio_load_raw tests. */
+static f32 g_raw_buf[SYNTH_SAMPLE_RATE];   /* 1 second of silence at 44100 Hz */
+
+static void test_audio_load_raw_success(void)
+{
+    TEST_BEGIN("audio_load_raw_success");
+    audio_t a;
+    SDL_memset(&a, 0, sizeof(a));
+    SDL_memset(g_raw_buf, 0, sizeof(g_raw_buf));
+    CHECK(audio_init(&a));
+    CHECK(audio_load_raw(&a, g_raw_buf, SYNTH_SAMPLE_RATE, 44100.0f));
+    CHECK(a.audio          != NULL);
+    CHECK(a.duration_frames == SYNTH_SAMPLE_RATE);
+    CHECK(a.channels        == 1);
+    audio_quit(&a);
+    TEST_END();
+}
+
+static void test_audio_load_raw_fail_load(void)
+{
+    TEST_BEGIN("audio_load_raw_fail_load");
+    audio_t a;
+    SDL_memset(&a, 0, sizeof(a));
+    SDL_memset(g_raw_buf, 0, sizeof(g_raw_buf));
+    CHECK(audio_init(&a));
+    g_mock_MIX_LoadRawAudioNoCopy_fail = true;
+    suppress_sdl_log();
+    CHECK(!audio_load_raw(&a, g_raw_buf, SYNTH_SAMPLE_RATE, 44100.0f));
+    restore_sdl_log();
+    CHECK(a.audio == NULL);
+    audio_quit(&a);
+    TEST_END();
+}
+
+static void test_audio_load_raw_fail_set_track(void)
+{
+    TEST_BEGIN("audio_load_raw_fail_set_track");
+    audio_t a;
+    SDL_memset(&a, 0, sizeof(a));
+    SDL_memset(g_raw_buf, 0, sizeof(g_raw_buf));
+    CHECK(audio_init(&a));
+    g_mock_MIX_SetTrackAudio_fail = true;
+    suppress_sdl_log();
+    CHECK(!audio_load_raw(&a, g_raw_buf, SYNTH_SAMPLE_RATE, 44100.0f));
+    restore_sdl_log();
+    CHECK(a.audio == NULL);
+    audio_quit(&a);
+    TEST_END();
+}
+
+static void test_audio_load_raw_fail_raw_callback(void)
+{
+    TEST_BEGIN("audio_load_raw_fail_raw_callback");
+    audio_t a;
+    SDL_memset(&a, 0, sizeof(a));
+    SDL_memset(g_raw_buf, 0, sizeof(g_raw_buf));
+    CHECK(audio_init(&a));
+    g_mock_MIX_SetTrackRawCallback_fail = true;
+    suppress_sdl_log();
+    CHECK(!audio_load_raw(&a, g_raw_buf, SYNTH_SAMPLE_RATE, 44100.0f));
+    restore_sdl_log();
+    CHECK(a.audio == NULL);
+    audio_quit(&a);
+    TEST_END();
+}
+
+/* ---- audio_play_looped -------------------------------------------------- */
+
+static void test_audio_play_looped_success(void)
+{
+    TEST_BEGIN("audio_play_looped_success");
+    audio_t a;
+    SDL_memset(&a, 0, sizeof(a));
+    SDL_memset(g_raw_buf, 0, sizeof(g_raw_buf));
+    CHECK(audio_init(&a));
+    CHECK(audio_load_raw(&a, g_raw_buf, SYNTH_SAMPLE_RATE, 44100.0f));
+    CHECK(audio_play_looped(&a));
+    CHECK(a.status == AUDIO_STATUS_PLAYING);
+    audio_quit(&a);
+    TEST_END();
+}
+
+static void test_audio_play_looped_fail_props(void)
+{
+    TEST_BEGIN("audio_play_looped_fail_props");
+    audio_t a;
+    SDL_memset(&a, 0, sizeof(a));
+    SDL_memset(g_raw_buf, 0, sizeof(g_raw_buf));
+    CHECK(audio_init(&a));
+    CHECK(audio_load_raw(&a, g_raw_buf, SYNTH_SAMPLE_RATE, 44100.0f));
+    g_mock_SDL_CreateProperties_fail = true;
+    suppress_sdl_log();
+    CHECK(!audio_play_looped(&a));
+    restore_sdl_log();
+    audio_quit(&a);
+    TEST_END();
+}
+
+static void test_audio_play_looped_fail_play(void)
+{
+    TEST_BEGIN("audio_play_looped_fail_play");
+    audio_t a;
+    SDL_memset(&a, 0, sizeof(a));
+    SDL_memset(g_raw_buf, 0, sizeof(g_raw_buf));
+    CHECK(audio_init(&a));
+    CHECK(audio_load_raw(&a, g_raw_buf, SYNTH_SAMPLE_RATE, 44100.0f));
+    g_mock_MIX_PlayTrack_fail = true;
+    suppress_sdl_log();
+    CHECK(!audio_play_looped(&a));
+    restore_sdl_log();
+    audio_quit(&a);
+    TEST_END();
+}
+
 /* ── Suite ───────────────────────────────────────────────────────────────── */
 
 void run_audio_tests(void)
@@ -671,4 +788,11 @@ void run_audio_tests(void)
     test_audio_unload_null();
     test_audio_track_stopped_event_zero();
     test_audio_track_stopped_event_nonzero();
+    test_audio_load_raw_success();
+    test_audio_load_raw_fail_load();
+    test_audio_load_raw_fail_set_track();
+    test_audio_load_raw_fail_raw_callback();
+    test_audio_play_looped_success();
+    test_audio_play_looped_fail_props();
+    test_audio_play_looped_fail_play();
 }

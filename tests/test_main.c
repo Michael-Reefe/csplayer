@@ -31,6 +31,7 @@ void run_fft_tests(void);
 void run_spectrum_tests(void);
 void run_playlist_tests(void);
 void run_audio_tests(void);
+void run_synth_tests(void);
 void run_ui_tests(void);
 
 /* ── Test WAV generation ─────────────────────────────────────────────────── */
@@ -115,6 +116,9 @@ int main(void)
 
     printf("\n-- audio (integration) --\n");
     run_audio_tests();
+
+    printf("\n-- synth --\n");
+    run_synth_tests();
 
     printf("\n-- ui (integration) --\n");
     run_ui_tests();

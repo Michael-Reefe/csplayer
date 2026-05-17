@@ -4,16 +4,18 @@ add_executable(csplayer_tests
     test_spectrum.c
     test_playlist.c
     test_audio.c
+    test_synth.c
     test_ui.c
     test_mocks.c
     ../src/fft.c
     ../src/spectrum.c
     ../src/playlist.c
     ../src/audio.c
-    ../src/ui.c)
+    ../src/ui.c
+    ../src/synth.c)
 
 target_compile_definitions(csplayer_tests PRIVATE CSPLAYER_TESTING)
-target_include_directories(csplayer_tests PRIVATE ../src .)
+target_include_directories(csplayer_tests PRIVATE ../src . ${tinysoundfont_SOURCE_DIR})
 
 if(MSVC)
     target_compile_options(csplayer_tests PRIVATE /W4 /WX /permissive-)
@@ -29,3 +31,10 @@ target_link_libraries(csplayer_tests PRIVATE
     ${MATH_LIB})
 
 add_test(NAME csplayer_tests COMMAND csplayer_tests)
+
+# Give the test binary the absolute path to gm.sf2 so it works regardless of
+# the working directory.  If the file is absent, the synth tests skip cleanly.
+if(EXISTS "${GM_SF2}")
+    target_compile_definitions(csplayer_tests PRIVATE
+        SF2_PATH="${GM_SF2}")
+endif()

@@ -115,6 +115,22 @@ void audio_snapshot_ring(audio_t *a, f32 *dst);
 void audio_set_volume(audio_t *a, f32 volume);
 
 /*
+ * Load a raw mono PCM buffer (f32, sample_rate Hz) into the mixer.
+ * The buffer must remain valid until audio_unload / audio_quit —
+ * SDL does not copy it (NoCopy semantics).  Does NOT register a
+ * track-stopped callback; call audio_play_looped after this.
+ * Returns true on success.
+ */
+bool audio_load_raw(audio_t *a, const f32 *buf, i32 nframes, f32 sample_rate);
+
+/*
+ * Begin infinite-loop playback of the currently loaded audio.
+ * Passes MIX_PROP_PLAY_MAX_LOOPS_NUMBER = -1 to SDL3_mixer.
+ * Returns true on success; status becomes AUDIO_STATUS_PLAYING.
+ */
+bool audio_play_looped(audio_t *a);
+
+/*
  * Unload the current audio file (stop + free), leaving the mixer and track
  * intact.  Safe to call when nothing is loaded.
  */
