@@ -74,6 +74,7 @@ static void track_stopped_cb(void *userdata, MIX_Track *t)
 
     audio_t *a = (audio_t *)userdata;
     assert(a != NULL);
+    assert(a->event_track_done == 0 || a->event_track_done >= SDL_EVENT_USER);
 
     a->status = AUDIO_STATUS_STOPPED;
 
@@ -96,6 +97,7 @@ static void track_stopped_cb(void *userdata, MIX_Track *t)
 static void unload_audio(audio_t *a)
 {
     assert(a != NULL);
+    assert(a->duration_frames >= -1);
 
     if (a->track != NULL) {
         /* Clear the stopped callback before stopping to prevent re-entrancy. */
@@ -122,6 +124,7 @@ static void unload_audio(audio_t *a)
 bool audio_init(audio_t *a)
 {
     assert(a != NULL);
+    assert(RING_SIZE > 0);
 
     SDL_memset(a, 0, sizeof(*a));
     a->status          = AUDIO_STATUS_STOPPED;
@@ -335,10 +338,7 @@ void audio_snapshot_ring(audio_t *a, f32 *dst)
     /* Copy RING_SIZE samples oldest-first by rotating around ring_write. */
     i32 write_at = a->ring_write;
     for (i32 i = 0; i < RING_SIZE; i++) {
-        assert(i < RING_SIZE);
-        i32 idx = (write_at + i) % RING_SIZE;
-        assert(idx >= 0 && idx < RING_SIZE);
-        dst[i] = a->ring[idx];
+        dst[i] = a->ring[(write_at + i) % RING_SIZE];
     }
 
     SDL_UnlockMutex(a->ring_mutex);
@@ -358,7 +358,7 @@ bool audio_load_raw(audio_t *a, const f32 *buf, i32 nframes, f32 sample_rate)
     SDL_memset(&spec, 0, sizeof(spec));
     spec.format   = SDL_AUDIO_F32;
     spec.channels = 1;
-    spec.freq     = (int)sample_rate;
+    spec.freq     = (i32)sample_rate;
 
     a->audio = MIX_LoadRawAudioNoCopy(a->mixer, buf, (size_t)nframes * sizeof(f32), &spec, false);
     if (a->audio == NULL) {
@@ -419,6 +419,7 @@ bool audio_play_looped(audio_t *a)
 void audio_unload(audio_t *a)
 {
     assert(a != NULL);
+    assert(a->duration_frames >= -1);
     unload_audio(a);
 }
 
@@ -433,6 +434,7 @@ void audio_set_volume(audio_t *a, f32 volume)
 void audio_quit(audio_t *a)
 {
     assert(a != NULL);
+    assert(RING_SIZE > 0);
 
     if (a->ring_mutex != NULL) {
         SDL_DestroyMutex(a->ring_mutex);

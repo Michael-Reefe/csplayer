@@ -94,7 +94,6 @@ static void file_dialog_cb(void *userdata, const char *const *filelist,
 
     if (filelist != NULL) {
         for (i32 i = 0; filelist[i] != NULL && s_dialog_count < PLAYLIST_MAX; i++) {
-            assert(i < PLAYLIST_MAX * 2);
             SDL_strlcpy(s_dialog_buf[s_dialog_count], filelist[i],
                         (size_t)PATH_MAX_LEN);
             s_dialog_count++;
@@ -151,7 +150,7 @@ static void init_font(ui_t *ui)
     if (base == NULL) { return; }
 
     char font_path[PATH_MAX_LEN];
-    SDL_snprintf(font_path, sizeof(font_path), "%sunifont.otf", base);
+    (void)SDL_snprintf(font_path, sizeof(font_path), "%sunifont.otf", base);
     ui->font = TTF_OpenFont(font_path, 8.0f * (f32)DISPLAY_SCALE);
     if (ui->font == NULL) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -200,16 +199,94 @@ static void load_current_track(app_t *app)
     }
 }
 
+/* Rebuild the synth buffer and restart playback if synth was already playing. */
+static void synth_rebuild_if_playing(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->synth.buf_frames <= SYNTH_MAX_FRAMES);
+    if (!app->ui.synth_playing) { return; }
+    (void)audio_stop(&app->audio);
+    synth_build(&app->synth);
+    if (audio_load_raw(&app->audio, app->synth.buf,
+                       app->synth.buf_frames, (f32)SYNTH_SAMPLE_RATE)) {
+        (void)audio_play_looped(&app->audio);
+    }
+}
+
 /* ── SDL3 callback: SDL_AppInit ──────────────────────────────────────────── */
+
+static SDL_AppResult app_create_window(app_t *app)
+{
+    assert(app != NULL);
+    assert(LOG_W > 0 && LOG_H > 0);
+
+    u32 first_ev = SDL_RegisterEvents(2);
+    if (first_ev == (u32)-1) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "app_create_window: SDL_RegisterEvents failed: %s",
+                     SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
+    app->event_track_done  = first_ev;
+    app->event_files_added = first_ev + 1;
+
+    if (!SDL_CreateWindowAndRenderer(CSPLAYER_APP_NAME, PHYS_W, PHYS_H,
+                                     SDL_WINDOW_RESIZABLE,
+                                     &app->window, &app->renderer)) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "app_create_window: SDL_CreateWindowAndRenderer failed: %s",
+                     SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
+    (void)SDL_SetRenderLogicalPresentation(app->renderer, LOG_W, LOG_H,
+                                           SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+    (void)SDL_SetWindowAspectRatio(app->window, 16.0f / 9.0f, 16.0f / 9.0f);
+    (void)SDL_SetWindowMinimumSize(app->window, LOG_W, LOG_H);
+    return SDL_APP_CONTINUE;
+}
+
+static SDL_AppResult app_init_modules(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->renderer != NULL);
+
+    if (!audio_init(&app->audio))       { return SDL_APP_FAILURE; }
+    app->audio.event_track_done = app->event_track_done;
+    if (!fft_init(&app->fft))           { return SDL_APP_FAILURE; }
+    spectrum_init_lut(&app->spectrum, 44100.0f);
+    if (!playlist_init(&app->playlist)) { return SDL_APP_FAILURE; }
+    if (!playlist_load(&app->playlist)) { return SDL_APP_FAILURE; }
+    init_font(&app->ui);
+
+    {
+        const char *base = SDL_GetBasePath();
+        char sf2_path[PATH_MAX_LEN];
+        if (base != NULL) {
+            (void)SDL_snprintf(sf2_path, sizeof(sf2_path), "%sgm.sf2", base);
+        } else {
+            (void)SDL_strlcpy(sf2_path, "gm.sf2", sizeof(sf2_path));
+        }
+        (void)synth_init(&app->synth, sf2_path);
+    }
+
+    app->ui.pl_hover       = -1;
+    app->ui.vol_pos        = 1.0f;
+    app->ui.synth_inst     = app->synth.inst;
+    app->ui.synth_note     = app->synth.note;
+    app->ui.synth_dd_hover = -1;
+
+    if (app->playlist.current >= 0) { load_current_track(app); }
+    return SDL_APP_CONTINUE;
+}
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 {
     (void)argc;
     (void)argv;
 
-    /* Point SDL3 at our static instance. */
+    assert(appstate != NULL);
+    assert(PHYS_W > 0 && PHYS_H > 0);
     *appstate = &g_app;
-
     (void)SDL_SetAppMetadata(CSPLAYER_APP_NAME, CSPLAYER_APP_VERSION,
                              CSPLAYER_APP_ID);
 
@@ -219,74 +296,9 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
         return SDL_APP_FAILURE;
     }
 
-    /* Register two consecutive custom event types. */
-    u32 first_ev = SDL_RegisterEvents(2);
-    if (first_ev == (u32)-1) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "SDL_AppInit: SDL_RegisterEvents failed: %s", SDL_GetError());
-        return SDL_APP_FAILURE;
-    }
-    g_app.event_track_done  = first_ev;
-    g_app.event_files_added = first_ev + 1;
-
-    /* Create window and renderer. */
-    if (!SDL_CreateWindowAndRenderer(CSPLAYER_APP_NAME, PHYS_W, PHYS_H,
-                                     SDL_WINDOW_RESIZABLE,
-                                     &g_app.window, &g_app.renderer)) {
-        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                     "SDL_AppInit: SDL_CreateWindowAndRenderer failed: %s",
-                     SDL_GetError());
-        return SDL_APP_FAILURE;
-    }
-
-    /* Set logical (pixel-art) presentation. */
-    (void)SDL_SetRenderLogicalPresentation(g_app.renderer, LOG_W, LOG_H,
-                                           SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
-
-    /* Lock the window to a 16:9 aspect ratio and set minimum size to 1× logical. */
-    (void)SDL_SetWindowAspectRatio(g_app.window, 16.0f / 9.0f, 16.0f / 9.0f);
-    (void)SDL_SetWindowMinimumSize(g_app.window, LOG_W, LOG_H);
-
-    /* Initialise modules in dependency order. */
-    if (!audio_init(&g_app.audio))     { return SDL_APP_FAILURE; }
-    /* Must be set after audio_init (which zeroes the struct). */
-    g_app.audio.event_track_done = g_app.event_track_done;
-
-    if (!fft_init  (&g_app.fft))       { return SDL_APP_FAILURE; }
-
-    spectrum_init_lut(&g_app.spectrum, 44100.0f);
-
-    if (!playlist_init(&g_app.playlist)) { return SDL_APP_FAILURE; }
-    if (!playlist_load(&g_app.playlist)) { return SDL_APP_FAILURE; }
-
-    /* Initialise SDL3_ttf and load Unifont (non-fatal — falls back to ASCII). */
-    init_font(&g_app.ui);
-
-    /* Initialise synthesiser — load GM SoundFont from base path (non-fatal). */
-    {
-        const char *base = SDL_GetBasePath();
-        char sf2_path[PATH_MAX_LEN];
-        if (base != NULL) {
-            SDL_snprintf(sf2_path, sizeof(sf2_path), "%sgm.sf2", base);
-        } else {
-            SDL_strlcpy(sf2_path, "gm.sf2", sizeof(sf2_path));
-        }
-        (void)synth_init(&g_app.synth, sf2_path);
-    }
-
-    /* UI state starts zeroed (from .bss). */
-    g_app.ui.pl_hover       = -1;
-    g_app.ui.vol_pos        = 1.0f;   /* start at full volume (0 dB) */
-    g_app.ui.synth_inst     = g_app.synth.inst;
-    g_app.ui.synth_note     = g_app.synth.note;
-    g_app.ui.synth_dd_hover = -1;
-
-    /* If the saved playlist has a current track, load it (no auto-play). */
-    if (g_app.playlist.current >= 0) {
-        load_current_track(&g_app);
-    }
-
-    return SDL_APP_CONTINUE;
+    SDL_AppResult r = app_create_window(&g_app);
+    if (r != SDL_APP_CONTINUE) { return r; }
+    return app_init_modules(&g_app);
 }
 
 /* ── SDL3 callback: SDL_AppIterate ───────────────────────────────────────── */
@@ -311,6 +323,109 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 
 /* ── Event sub-handlers ──────────────────────────────────────────────────── */
 
+static void dispatch_play_pause(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->audio.sample_rate > 0.0f);
+    if (app->mode == APP_MODE_SYNTH) {
+        if (app->ui.synth_playing) {
+            (void)audio_stop(&app->audio);
+            app->ui.synth_playing = false;
+        } else {
+            (void)audio_stop(&app->audio);
+            if (app->synth.dirty) { synth_build(&app->synth); }
+            if (audio_load_raw(&app->audio, app->synth.buf,
+                               app->synth.buf_frames, (f32)SYNTH_SAMPLE_RATE) &&
+                audio_play_looped(&app->audio)) {
+                app->ui.synth_playing = true;
+            }
+        }
+    } else {
+        if (app->audio.status == AUDIO_STATUS_STOPPED) {
+            (void)audio_play(&app->audio);
+        } else {
+            (void)audio_toggle_pause(&app->audio);
+        }
+    }
+}
+
+static void dispatch_rewind(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->audio.sample_rate > 0.0f);
+    if (app->mode == APP_MODE_SYNTH) {
+        (void)audio_seek(&app->audio, 0.0f);
+    } else if (audio_elapsed_sec(&app->audio) < 1.0 &&
+               playlist_prev(&app->playlist) >= 0) {
+        load_current_track(app);
+        (void)audio_play(&app->audio);
+    } else {
+        (void)audio_seek(&app->audio, 0.0f);
+    }
+}
+
+static void dispatch_open_dialog(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->window != NULL);
+    app->ui.dialog_open = true;
+    static const SDL_DialogFileFilter filters[] = {
+        { "Audio files", "wav;mp3;flac;ogg;opus" },
+        { "WAV",  "wav"  },
+        { "MP3",  "mp3"  },
+        { "FLAC", "flac" },
+        { "OGG",  "ogg"  },
+        { "OPUS", "opus" },
+    };
+    SDL_ShowOpenFileDialog(file_dialog_cb, app, app->window,
+                           filters, 4, NULL, true);
+}
+
+static void dispatch_pl_remove(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->ui.pl_hover >= 0 && app->ui.pl_hover < app->playlist.count);
+    bool was_current = (app->ui.pl_hover == app->playlist.current);
+    (void)playlist_remove(&app->playlist, app->ui.pl_hover);
+    if (was_current) {
+        if (app->playlist.current >= 0) { load_current_track(app); }
+        else                            { audio_unload(&app->audio); }
+    }
+    (void)playlist_save(&app->playlist);
+}
+
+static void dispatch_mode_toggle(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->mode == APP_MODE_PLAYER || app->mode == APP_MODE_SYNTH);
+    bool was_synth = (app->mode == APP_MODE_SYNTH);
+    (void)audio_stop(&app->audio);
+    audio_unload(&app->audio);
+    app->mode = was_synth ? APP_MODE_PLAYER : APP_MODE_SYNTH;
+    app->ui.synth_playing = false;
+    if (was_synth && app->playlist.current >= 0) { load_current_track(app); }
+}
+
+static void dispatch_synth_inst(app_t *app, i32 new_inst)
+{
+    assert(app != NULL);
+    assert(new_inst >= 0 && new_inst < SYNTH_INSTRUMENTS);
+    app->synth.inst    = new_inst;
+    app->synth.dirty   = true;
+    app->ui.synth_inst = new_inst;
+    synth_rebuild_if_playing(app);
+}
+
+static void dispatch_synth_note(app_t *app, i32 new_note)
+{
+    assert(app != NULL);
+    assert(new_note >= 0 && new_note < SYNTH_NOTES);
+    app->synth.note    = new_note;
+    app->synth.dirty   = true;
+    app->ui.synth_note = new_note;
+    synth_rebuild_if_playing(app);
+}
+
 /* Dispatch a ui_action_t returned by any input handler to audio/playlist. */
 static void dispatch_action(app_t *app, ui_action_t action)
 {
@@ -318,26 +433,16 @@ static void dispatch_action(app_t *app, ui_action_t action)
     assert(app->playlist.count <= PLAYLIST_MAX);
 
     switch (action) {
-    case UI_ACTION_PLAY_PAUSE:
-        if (app->audio.status == AUDIO_STATUS_STOPPED) {
-            (void)audio_play(&app->audio);
-        } else {
-            (void)audio_toggle_pause(&app->audio);
-        }
-        break;
-    case UI_ACTION_REWIND:
-        if (audio_elapsed_sec(&app->audio) < 1.0 &&
-                playlist_prev(&app->playlist) >= 0) {
+    case UI_ACTION_PLAY_PAUSE:  dispatch_play_pause(app);  break;
+    case UI_ACTION_REWIND:      dispatch_rewind(app);      break;
+    case UI_ACTION_NEXT:
+        if (app->mode != APP_MODE_SYNTH) {
+            (void)playlist_next(&app->playlist);
             load_current_track(app);
             (void)audio_play(&app->audio);
         } else {
             (void)audio_seek(&app->audio, 0.0f);
         }
-        break;
-    case UI_ACTION_NEXT:
-        (void)playlist_next(&app->playlist);
-        load_current_track(app);
-        (void)audio_play(&app->audio);
         break;
     case UI_ACTION_SEEK:
         (void)audio_seek(&app->audio, app->ui.scrub_pos);
@@ -345,77 +450,34 @@ static void dispatch_action(app_t *app, ui_action_t action)
     case UI_ACTION_SET_VOLUME:
         audio_set_volume(&app->audio, vol_pos_to_gain(app->ui.vol_pos));
         break;
-    case UI_ACTION_OPEN_DIALOG: {
-        app->ui.dialog_open = true;
-        static const SDL_DialogFileFilter filters[] = {
-            { "Audio files", "wav;mp3;flac;ogg;opus" },
-            { "WAV",  "wav"  },
-            { "MP3",  "mp3"  },
-            { "FLAC", "flac" },
-            { "OGG",  "ogg"  },
-            { "OPUS", "opus" },
-        };
-        SDL_ShowOpenFileDialog(file_dialog_cb, app, app->window,
-                               filters, 4, NULL, true);
-        break;
-    }
+    case UI_ACTION_OPEN_DIALOG: dispatch_open_dialog(app); break;
     case UI_ACTION_PL_SELECT:
         (void)playlist_set_current(&app->playlist, app->ui.pl_hover);
         load_current_track(app);
         break;
-    case UI_ACTION_PL_REMOVE: {
-        bool was_current = (app->ui.pl_hover == app->playlist.current);
-        (void)playlist_remove(&app->playlist, app->ui.pl_hover);
-        if (was_current) {
-            if (app->playlist.current >= 0) { load_current_track(app); }
-            else                            { audio_unload(&app->audio); }
-        }
-        (void)playlist_save(&app->playlist);
-        break;
-    }
-    case UI_ACTION_MODE_TOGGLE:
-        (void)audio_stop(&app->audio);
-        audio_unload(&app->audio);
-        app->mode = (app->mode == APP_MODE_PLAYER) ? APP_MODE_SYNTH : APP_MODE_PLAYER;
-        app->ui.synth_playing = false;
-        break;
+    case UI_ACTION_PL_REMOVE:   dispatch_pl_remove(app);   break;
+    case UI_ACTION_MODE_TOGGLE: dispatch_mode_toggle(app); break;
     case UI_ACTION_SYNTH_INST_UP:
-        app->synth.inst   = (app->synth.inst + 1) % SYNTH_INSTRUMENTS;
-        app->synth.dirty  = true;
-        app->ui.synth_inst = app->synth.inst;
+        dispatch_synth_inst(app, (app->synth.inst + 1) % SYNTH_INSTRUMENTS);
         break;
     case UI_ACTION_SYNTH_INST_DOWN:
-        app->synth.inst   = (app->synth.inst + SYNTH_INSTRUMENTS - 1) % SYNTH_INSTRUMENTS;
-        app->synth.dirty  = true;
-        app->ui.synth_inst = app->synth.inst;
+        dispatch_synth_inst(app,
+            (app->synth.inst + SYNTH_INSTRUMENTS - 1) % SYNTH_INSTRUMENTS);
         break;
     case UI_ACTION_SYNTH_NOTE_UP:
-        if (app->synth.note < SYNTH_NOTES - 1) {
-            app->synth.note++;
-            app->synth.dirty = true;
-        }
-        app->ui.synth_note = app->synth.note;
+        dispatch_synth_note(app,
+            app->synth.note < SYNTH_NOTES - 1 ? app->synth.note + 1
+                                               : app->synth.note);
         break;
     case UI_ACTION_SYNTH_NOTE_DOWN:
-        if (app->synth.note > 0) {
-            app->synth.note--;
-            app->synth.dirty = true;
-        }
-        app->ui.synth_note = app->synth.note;
+        dispatch_synth_note(app,
+            app->synth.note > 0 ? app->synth.note - 1 : app->synth.note);
         break;
-    case UI_ACTION_SYNTH_PLAY_START:
-        (void)audio_stop(&app->audio);
-        if (app->synth.dirty) { synth_build(&app->synth); }
-        if (audio_load_raw(&app->audio, app->synth.buf,
-                           app->synth.buf_frames, (f32)SYNTH_SAMPLE_RATE)) {
-            if (audio_play_looped(&app->audio)) {
-                app->ui.synth_playing = true;
-            }
-        }
+    case UI_ACTION_SYNTH_INST_SET:
+        dispatch_synth_inst(app, app->ui.synth_dd_select);
         break;
-    case UI_ACTION_SYNTH_PLAY_STOP:
-        (void)audio_stop(&app->audio);
-        app->ui.synth_playing = false;
+    case UI_ACTION_SYNTH_NOTE_SET:
+        dispatch_synth_note(app, app->ui.synth_dd_select);
         break;
     default:
         break;
@@ -541,6 +603,7 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result)
     (void)result;
 
     app_t *app = (app_t *)appstate;
+    assert(appstate == (void *)&g_app || appstate == NULL);
     if (app == NULL) { return; }
 
     (void)playlist_save(&app->playlist);
@@ -549,6 +612,8 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result)
     fft_quit  (&app->fft);
     /* spectrum and playlist have no resources to free beyond what we own. */
 
+    if (app->ui.hdr_title_tex  != NULL) { SDL_DestroyTexture(app->ui.hdr_title_tex);  }
+    if (app->ui.hdr_artist_tex != NULL) { SDL_DestroyTexture(app->ui.hdr_artist_tex); }
     if (app->ui.font != NULL) {
         TTF_CloseFont(app->ui.font);
         app->ui.font = NULL;

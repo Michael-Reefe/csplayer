@@ -371,6 +371,31 @@ static void test_playlist_current_path(void)
     TEST_END();
 }
 
+static void test_playlist_artist_empty_nonexistent(void)
+{
+    TEST_BEGIN("playlist_artist_empty_nonexistent");
+    reset_pl();
+    /* Paths that don't exist on disk → metadata_read_artist fails gracefully
+     * and the artist field stays empty. */
+    const char *paths[] = { "/nonexistent/track.mp3", NULL };
+    playlist_add_paths(&g_pl, paths);
+    /* artist must be NUL-terminated and empty (no crash). */
+    CHECK(g_pl.entries[0].artist[0] == '\0');
+    TEST_END();
+}
+
+static void test_playlist_artist_field_exists(void)
+{
+    TEST_BEGIN("playlist_artist_field_exists");
+    reset_pl();
+    /* Verify the struct has the artist field at the expected size. */
+    playlist_entry_t e;
+    SDL_memset(&e, 0, sizeof(e));
+    SDL_strlcpy(e.artist, "Test Artist", (size_t)TITLE_MAX_LEN);
+    CHECK(SDL_strcmp(e.artist, "Test Artist") == 0);
+    TEST_END();
+}
+
 /* ── Suite ───────────────────────────────────────────────────────────────── */
 
 void run_playlist_tests(void)
@@ -399,4 +424,6 @@ void run_playlist_tests(void)
     test_playlist_load_with_file();
     test_playlist_save_basic();
     test_playlist_current_path();
+    test_playlist_artist_empty_nonexistent();
+    test_playlist_artist_field_exists();
 }

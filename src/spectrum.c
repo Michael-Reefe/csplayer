@@ -21,7 +21,6 @@ void spectrum_init_lut(spectrum_t *s, f32 sample_rate)
     assert(span > 0.0f);
 
     for (i32 x = 0; x < SPEC_W; x++) {
-        assert(x < SPEC_W);
 
         /* Map pixel column to log-spaced frequency in [FREQ_MIN, FREQ_MAX]. */
         f32 t    = (f32)x / (f32)(SPEC_W - 1);
@@ -60,7 +59,6 @@ void spectrum_update(spectrum_t *s, const fft_t *f)
     assert(db_range > 0.0f);
 
     for (i32 x = 0; x < SPEC_W; x++) {
-        assert(x < SPEC_W);
         assert(s->bin_lo[x] >= 0 && s->bin_lo[x] < FFT_BINS);
         assert(s->bin_hi[x] >= 0 && s->bin_hi[x] < FFT_BINS);
 

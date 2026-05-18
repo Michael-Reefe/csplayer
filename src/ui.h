@@ -45,8 +45,8 @@ typedef enum {
     UI_ACTION_SYNTH_INST_DOWN,   /* instrument -1 (wrap)                      */
     UI_ACTION_SYNTH_NOTE_UP,     /* MIDI note +1 (clamp at 127)               */
     UI_ACTION_SYNTH_NOTE_DOWN,   /* MIDI note -1 (clamp at 0)                 */
-    UI_ACTION_SYNTH_PLAY_START,  /* HOLD button mouse-down — begin looped play */
-    UI_ACTION_SYNTH_PLAY_STOP,   /* HOLD button mouse-up   — stop playback    */
+    UI_ACTION_SYNTH_INST_SET,    /* dropdown item selected — synth_dd_select   */
+    UI_ACTION_SYNTH_NOTE_SET,    /* dropdown item selected — synth_dd_select   */
 } ui_action_t;
 
 /* ── Module state ────────────────────────────────────────────────────────── */
@@ -69,6 +69,24 @@ typedef struct {
     bool      synth_note_open;  /* note dropdown visible                       */
     i32       synth_dd_scroll;  /* first row visible in open dropdown          */
     i32       synth_dd_hover;   /* hovered dropdown row (-1 = none)            */
+    i32       synth_dd_select;  /* item chosen by last INST_SET / NOTE_SET     */
+    bool      synth_dd_sb_dragging; /* true while dragging the dropdown scrollbar  */
+    /* Marquee scrolling for the header title (all zero = idle / not yet started). */
+    f32    marquee_x;           /* pixels shifted left; 0 = start of text  */
+    f32    marquee_dir;         /* +1.0 or -1.0 current scroll direction   */
+    Uint64 marquee_pause_until; /* SDL_GetTicks() value when pause ends    */
+    Uint64 marquee_last_ms;     /* SDL_GetTicks() of last animation update */
+    i32    marquee_track;       /* pl->current when marquee state was set  */
+    /* Header title texture cache — rebuilt only when the displayed text changes
+     * so the render loop makes no dynamic allocations in the steady state (Rule 3).
+     * Playlist row TTF is a bounded exception: max PL_H/PL_ROW alloc-free pairs
+     * per frame, proportional to the visible row count. */
+    SDL_Texture *hdr_title_tex;               /* pre-rendered title texture       */
+    SDL_Texture *hdr_artist_tex;              /* pre-rendered " - Artist" texture */
+    f32          hdr_title_w;                 /* logical px width of title        */
+    f32          hdr_artist_w;                /* logical px width of artist part  */
+    char         hdr_cache_title[TITLE_MAX_LEN];       /* title at last build     */
+    char         hdr_cache_artist[TITLE_MAX_LEN + 4];  /* artist at last build    */
 } ui_t;
 
 /* ── Public interface ────────────────────────────────────────────────────── */

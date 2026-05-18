@@ -35,7 +35,7 @@ typedef  double complex c64;
 
 /* ── Application metadata ────────────────────────────────────────────────── */
 #define CSPLAYER_APP_NAME    "csplayer"
-#define CSPLAYER_APP_VERSION "0.1.1"
+#define CSPLAYER_APP_VERSION "0.2.0"
 #define CSPLAYER_APP_ID      "com.csplayer.csplayer"
 #define CSPLAYER_ORG         "csplayer"
 
@@ -108,15 +108,15 @@ typedef enum {
 
 /* ── Synthesizer ─────────────────────────────────────────────────────────── */
 #define SYNTH_SAMPLE_RATE  44100
-/* 1-second sustain buffer, looped while HOLD button is held (~176 KB in BSS). */
-#define SYNTH_MAX_FRAMES   SYNTH_SAMPLE_RATE
+/* 10-second sustain buffer — attack repeats only every 10 s when looping (~1.7 MB in BSS). */
+#define SYNTH_MAX_FRAMES   (10 * SYNTH_SAMPLE_RATE)
 #define SYNTH_INSTRUMENTS  128   /* all General MIDI programs 0–127 */
 #define SYNTH_NOTES        128   /* MIDI note range 0–127           */
 
 /* ── Playlist ────────────────────────────────────────────────────────────── */
 #define PLAYLIST_MAX    256   /* maximum number of tracks      */
 #define PATH_MAX_LEN    512   /* maximum file path (bytes)     */
-#define TITLE_MAX_LEN   128   /* maximum display title (bytes) */
+#define TITLE_MAX_LEN   256   /* maximum display title (bytes) */
 
 /* ── Colors (R, G, B, A) — used with SDL_SetRenderDrawColor ─────────────── */
 #define COL_BG          8,   8,  16, 255   /* near-black background     */

@@ -1,9 +1,9 @@
 /*
  * synth.h — TinySoundFont-based GM synthesis module.
  *
- * Renders a 1-second sustain buffer for the currently selected instrument
+ * Renders a 10-second sustain buffer for the currently selected instrument
  * and MIDI note.  The buffer is looped infinitely via audio_play_looped
- * while the HOLD button is pressed and stopped on release.
+ * while playing and stopped on toggle.
  *
  * TinySoundFont (MIT) is a single-header library: the implementation is
  * compiled in synth.c via #define TSF_IMPLEMENTATION.
@@ -24,7 +24,7 @@ typedef struct tsf tsf;
 
 typedef struct {
     tsf *font;                   /* TinySoundFont handle; NULL if .sf2 absent */
-    f32  buf[SYNTH_MAX_FRAMES];  /* 1-second mono PCM, looped while HOLD held */
+    f32  buf[SYNTH_MAX_FRAMES];  /* PCM buffer, looped while playing          */
     i32  buf_frames;             /* valid frames in buf (= SYNTH_MAX_FRAMES)   */
     bool dirty;                  /* true → buf needs to be rebuilt             */
     i32  inst;                   /* GM program [0, SYNTH_INSTRUMENTS)          */
@@ -41,7 +41,7 @@ typedef struct {
 bool synth_init(synth_t *s, const char *sf2_path);
 
 /*
- * Render a 1-second sustain buffer for the current inst/note.
+ * Render a 10-second sustain buffer for the current inst/note.
  * Clears dirty.  Safe to call when font==NULL (fills with silence).
  */
 void synth_build(synth_t *s);

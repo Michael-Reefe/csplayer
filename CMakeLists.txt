@@ -98,6 +98,7 @@ add_executable(csplayer
     src/fft.c
     src/spectrum.c
     src/playlist.c
+    src/metadata.c
     src/ui.c
     src/synth.c)
 
@@ -230,7 +231,7 @@ elseif(APPLE)
 endif()
 
 set(CPACK_PACKAGE_NAME                "csplayer")
-set(CPACK_PACKAGE_VERSION             "0.1.1")
+set(CPACK_PACKAGE_VERSION             "0.2.0")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Lightweight audio player with real-time spectrum analyser")
 set(CPACK_STRIP_FILES                 TRUE)
 if(WIN32)

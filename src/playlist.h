@@ -19,6 +19,7 @@
 typedef struct {
     char path[PATH_MAX_LEN];     /* absolute filesystem path   */
     char title[TITLE_MAX_LEN];   /* display title (basename)   */
+    char artist[TITLE_MAX_LEN];  /* artist tag (empty if none) */
     f64  duration_sec;           /* track length in seconds    */
 } playlist_entry_t;
 

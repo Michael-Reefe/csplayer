@@ -23,7 +23,7 @@ static const char *const g_inst_names[SYNTH_INSTRUMENTS] = {
     /* 0–7   Piano      */ "Acoustic Grand Piano", "Bright Acoustic Piano",
                            "Electric Grand Piano", "Honky-tonk Piano",
                            "Electric Piano 1", "Electric Piano 2",
-                           "Harpsichord", "Clavi",
+                           "Harpsichord", "Clavinet",
     /* 8–15  Chrom Perc */ "Celesta", "Glockenspiel", "Music Box", "Vibraphone",
                            "Marimba", "Xylophone", "Tubular Bells", "Dulcimer",
     /* 16–23 Organ      */ "Drawbar Organ", "Percussive Organ", "Rock Organ",
@@ -123,6 +123,7 @@ void synth_build(synth_t *s)
 void synth_quit(synth_t *s)
 {
     assert(s != NULL);
+    assert(SYNTH_INSTRUMENTS > 0);
     if (s->font != NULL) {
         tsf_close(s->font);
         s->font = NULL;
@@ -132,7 +133,8 @@ void synth_quit(synth_t *s)
 f32 synth_note_hz(i32 note)
 {
     assert(note >= 0 && note < SYNTH_NOTES);
-    return 440.0f * (f32)pow(2.0, (double)(note - 69) / 12.0);
+    assert(SYNTH_NOTES == 128);  /* MIDI standard: 128 notes */
+    return 440.0f * powf(2.0f, (f32)(note - 69) / 12.0f);
 }
 
 void synth_note_name(i32 note, char *dst, i32 len)
@@ -140,8 +142,8 @@ void synth_note_name(i32 note, char *dst, i32 len)
     assert(note >= 0 && note < SYNTH_NOTES);
     assert(dst  != NULL);
     assert(len  >= 5);
-    SDL_snprintf(dst, (size_t)len, "%s%d",
-                 NOTE_NAMES[note % 12], note / 12 - 1);
+    (void)SDL_snprintf(dst, (size_t)len, "%s%d",
+                      NOTE_NAMES[note % 12], note / 12 - 1);
 }
 
 void synth_instrument_name(i32 inst, char *dst, i32 len)
@@ -149,5 +151,5 @@ void synth_instrument_name(i32 inst, char *dst, i32 len)
     assert(inst >= 0 && inst < SYNTH_INSTRUMENTS);
     assert(dst  != NULL);
     assert(len  >= 4);
-    SDL_strlcpy(dst, g_inst_names[inst], (size_t)len);
+    (void)SDL_strlcpy(dst, g_inst_names[inst], (size_t)len);
 }

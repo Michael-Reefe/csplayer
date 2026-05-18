@@ -35,13 +35,15 @@ static void rfft_plan_init(rfft_plan_t *plan, u32 N)
 
     for (u32 i = 0; i < M; i++) {
         u32 k = 0;
-        for (u32 j = 0; j < log2M; j++)
+        for (u32 j = 0; j < log2M; j++) {
             k = (k << 1) | (i >> j & 1);
+        }
         plan->bit_rev[i] = k;
     }
 
-    for (u32 k = 0; k < M; k++)
+    for (u32 k = 0; k < M; k++) {
         plan->tw[k] = cexpf(-2.0f * CSP_PI / (f32)N * (f32)k * I);
+    }
 }
 
 /* In-place N/2-point complex DIT butterfly on out[0..N/2-1]. */
@@ -97,8 +99,9 @@ static void rfft_execute(f32 *in, c32 *out, rfft_plan_t *plan)
     u32 M = N / 2;
 
     /* Pack: G[n] = x[2n] + j·x[2n+1] */
-    for (u32 n = 0; n < M; n++)
+    for (u32 n = 0; n < M; n++) {
         out[n] = in[2*n] + in[2*n+1] * I;
+    }
 
     c2c_fft(out, plan);
 
@@ -138,7 +141,6 @@ bool fft_init(fft_t *f)
 
     /* Precompute the Hann window:  w[i] = 0.5 * (1 − cos(2π·i / (N−1))) */
     for (i32 i = 0; i < FFT_SIZE; i++) {
-        assert(i < FFT_SIZE);
         f->window[i] = 0.5f * (1.0f - cosf(2.0f * CSP_PI
                                             * (f32)i / (f32)(FFT_SIZE - 1)));
     }
@@ -154,7 +156,6 @@ void fft_process(fft_t *f, const f32 *pcm_snapshot)
 
     /* Apply Hann window to the time-domain samples. */
     for (i32 i = 0; i < FFT_SIZE; i++) {
-        assert(i < FFT_SIZE);
         f->in[i] = pcm_snapshot[i] * f->window[i];
     }
 
@@ -164,7 +165,6 @@ void fft_process(fft_t *f, const f32 *pcm_snapshot)
      * Normalise by (FFT_SIZE / 2) so that a 0-dBFS sine gives mag ≈ 1.0. */
     f32 norm = 1.0f / (f32)(FFT_SIZE / 2);
     for (i32 k = 0; k < FFT_BINS; k++) {
-        assert(k < FFT_BINS);
         f32 re     = crealf(f->out[k]);
         f32 im     = cimagf(f->out[k]);
         f->mags[k] = sqrtf(re * re + im * im) * norm;

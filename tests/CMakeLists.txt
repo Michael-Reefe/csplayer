@@ -6,10 +6,12 @@ add_executable(csplayer_tests
     test_audio.c
     test_synth.c
     test_ui.c
+    test_metadata.c
     test_mocks.c
     ../src/fft.c
     ../src/spectrum.c
     ../src/playlist.c
+    ../src/metadata.c
     ../src/audio.c
     ../src/ui.c
     ../src/synth.c)
@@ -37,4 +39,9 @@ add_test(NAME csplayer_tests COMMAND csplayer_tests)
 if(EXISTS "${GM_SF2}")
     target_compile_definitions(csplayer_tests PRIVATE
         SF2_PATH="${GM_SF2}")
+endif()
+
+if(EXISTS "${UNIFONT_OTF}")
+    target_compile_definitions(csplayer_tests PRIVATE
+        UNIFONT_PATH="${UNIFONT_OTF}")
 endif()

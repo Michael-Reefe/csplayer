@@ -30,6 +30,11 @@
 #include "playlist.h"
 #include "test_mocks.h"
 
+/* Absolute path injected by CMake; fall back to local name if not set. */
+#ifndef UNIFONT_PATH
+#define UNIFONT_PATH "unifont.otf"
+#endif
+
 /* ── Private geometry constants (duplicated from ui.c for test use) ──────── */
 
 #define T_BTN_SZ    BTN_SZ
@@ -80,6 +85,7 @@ static SDL_KeyboardEvent make_key(SDL_Scancode sc)
 {
     SDL_KeyboardEvent e;
     SDL_memset(&e, 0, sizeof(e));
+    e.type     = SDL_EVENT_KEY_DOWN;
     e.scancode = sc;
     return e;
 }
@@ -985,9 +991,9 @@ static void test_ui_draw_ttf_render_fail(void)
 {
     TEST_BEGIN("ui_draw_ttf_render_fail");
     /* Try to load a TTF font; skip if unavailable. */
-    TTF_Font *font = TTF_OpenFont("unifont.otf", 8);
+    TTF_Font *font = TTF_OpenFont(UNIFONT_PATH, 8);
     if (font == NULL) {
-        printf("  SKIP  ui_draw_ttf_render_fail (unifont.otf not found)\n");
+        printf("  SKIP  ui_draw_ttf_render_fail (UNIFONT_PATH not found)\n");
         TEST_END();
         return;
     }
@@ -1009,9 +1015,9 @@ static void test_ui_draw_ttf_render_fail(void)
 static void test_ui_draw_ttf_texture_fail(void)
 {
     TEST_BEGIN("ui_draw_ttf_texture_fail");
-    TTF_Font *font = TTF_OpenFont("unifont.otf", 8);
+    TTF_Font *font = TTF_OpenFont(UNIFONT_PATH, 8);
     if (font == NULL) {
-        printf("  SKIP  ui_draw_ttf_texture_fail (unifont.otf not found)\n");
+        printf("  SKIP  ui_draw_ttf_texture_fail (UNIFONT_PATH not found)\n");
         TEST_END();
         return;
     }
@@ -1033,9 +1039,9 @@ static void test_ui_draw_ttf_texture_fail(void)
 static void test_ui_draw_font_valid(void)
 {
     TEST_BEGIN("ui_draw_font_valid");
-    TTF_Font *font = TTF_OpenFont("unifont.otf", 8);
+    TTF_Font *font = TTF_OpenFont(UNIFONT_PATH, 8);
     if (font == NULL) {
-        printf("  SKIP  ui_draw_font_valid (unifont.otf not found)\n");
+        printf("  SKIP  ui_draw_font_valid (UNIFONT_PATH not found)\n");
         TEST_END();
         return;
     }
@@ -1059,8 +1065,8 @@ static void test_ui_mode_toggle_click(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
-    /* Click inside mode button (MODE_BTN_X=70, y=10 inside h=16 range). */
-    SDL_MouseButtonEvent e = make_btn(75.0f, 10.0f, SDL_BUTTON_LEFT);
+    /* Mode button is now at MODE_BTN_X=78, w=96, so centre is x=126. */
+    SDL_MouseButtonEvent e = make_btn(120.0f, 10.0f, SDL_BUTTON_LEFT);
     CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_MODE_TOGGLE);
     TEST_END();
 }
@@ -1069,11 +1075,14 @@ static void test_ui_synth_inst_row_click(void)
 {
     TEST_BEGIN("ui_synth_inst_row_click");
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.synth_dd_hover = -1;
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
-    /* Synth inst row: y in [PL_Y, PL_Y+16) = [194, 210). */
+    /* Synth inst row: y in [PL_Y, PL_Y+16) = [194, 210).
+     * Now opens the dropdown → returns NONE, sets synth_inst_open. */
     SDL_MouseButtonEvent e = make_btn(100.0f, (f32)(PL_Y + 4), SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_SYNTH_INST_UP);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_NONE);
+    CHECK(ui.synth_inst_open);
     TEST_END();
 }
 
@@ -1081,33 +1090,130 @@ static void test_ui_synth_note_row_click(void)
 {
     TEST_BEGIN("ui_synth_note_row_click");
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.synth_dd_hover = -1;
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
-    /* Synth note row: y in [PL_Y+16, PL_Y+32) = [210, 226). */
+    /* Synth note row: y in [PL_Y+16, PL_Y+32) = [210, 226).
+     * Now opens the dropdown → returns NONE, sets synth_note_open. */
     SDL_MouseButtonEvent e = make_btn(100.0f, (f32)(PL_Y + 18), SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_SYNTH_NOTE_UP);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_NONE);
+    CHECK(ui.synth_note_open);
     TEST_END();
 }
 
-static void test_ui_synth_hold_mouse_down(void)
+static void test_ui_synth_panel_empty_area(void)
 {
-    TEST_BEGIN("ui_synth_hold_mouse_down");
+    TEST_BEGIN("ui_synth_panel_empty_area");
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
-    /* HOLD button: y in [PL_Y+32, PL_Y+PL_H) = [226, 258). */
+    /* Area below note row (y=PL_Y+40) has no button — returns NONE. */
     SDL_MouseButtonEvent e = make_btn(100.0f, (f32)(PL_Y + 40), SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_SYNTH_PLAY_START);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_NONE);
+    TEST_END();
+}
+
+static void test_ui_synth_dd_sb_drag_start(void)
+{
+    TEST_BEGIN("ui_synth_dd_sb_drag_start");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.synth_inst_open = true;
+    ui.synth_dd_scroll = 0;
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    /* x=505 is in [LOG_W-4-DD_SB_W=503, LOG_W-4=508) — scrollbar strip.
+     * y=DD_INST_Y+8=218 is inside the dropdown rect. */
+    SDL_MouseButtonEvent e = make_btn(505.0f, (f32)(PL_Y + 16 + 8), SDL_BUTTON_LEFT);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_NONE);
+    CHECK(ui.synth_dd_sb_dragging);
+    CHECK(ui.synth_inst_open);   /* dropdown stays open during scroll drag */
+    TEST_END();
+}
+
+static void test_ui_synth_dd_sb_drag_motion(void)
+{
+    TEST_BEGIN("ui_synth_dd_sb_drag_motion");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.synth_inst_open     = true;
+    ui.synth_dd_sb_dragging = true;
+    ui.synth_dd_scroll     = 0;
+    playlist_t pl = make_pl(0, -1);
+    /* Move to y = DD_INST_Y + DD_H/2 = 210 + 32 = 242 → t=0.5 → scroll≈62. */
+    SDL_MouseMotionEvent e = make_motion(505.0f, (f32)(PL_Y + 16 + 32));
+    ui_on_mouse_motion(&ui, &e, true, &pl);
+    CHECK(ui.synth_dd_scroll > 0);
+    TEST_END();
+}
+
+static void test_ui_synth_dd_sb_drag_end(void)
+{
+    TEST_BEGIN("ui_synth_dd_sb_drag_end");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.synth_dd_sb_dragging = true;
+    SDL_MouseButtonEvent e = make_btn(505.0f, 220.0f, SDL_BUTTON_LEFT);
+    CHECK(ui_on_mouse_up(&ui, &e) == UI_ACTION_NONE);
+    CHECK(!ui.synth_dd_sb_dragging);
+    TEST_END();
+}
+
+static void test_ui_synth_dropdown_select_inst(void)
+{
+    TEST_BEGIN("ui_synth_dropdown_select_inst");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.synth_dd_hover  = -1;
+    ui.synth_inst_open = true;
+    ui.synth_dd_scroll = 5;   /* first visible item = 5 */
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    /* Click row 0 of inst dropdown (DD_INST_Y = PL_Y+16 = 210, row_h=16).
+     * Item area: x in [4, LOG_W-4-DD_SB_W) = [4, 503). */
+    SDL_MouseButtonEvent e = make_btn(100.0f, (f32)(PL_Y + 16 + 4), SDL_BUTTON_LEFT);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH);
+    CHECK(act == UI_ACTION_SYNTH_INST_SET);
+    CHECK(ui.synth_dd_select == 5);   /* scroll=5, row=0 → item=5 */
+    CHECK(!ui.synth_inst_open);
+    TEST_END();
+}
+
+static void test_ui_synth_dropdown_close_outside(void)
+{
+    TEST_BEGIN("ui_synth_dropdown_close_outside");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.synth_dd_hover  = -1;
+    ui.synth_inst_open = true;
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    /* Click in spectrum area (x=10, y=100) — outside dropdown AND mode button. */
+    SDL_MouseButtonEvent e = make_btn(10.0f, 100.0f, SDL_BUTTON_LEFT);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_NONE);
+    CHECK(!ui.synth_inst_open);
+    TEST_END();
+}
+
+static void test_ui_synth_scroll_dropdown_open(void)
+{
+    TEST_BEGIN("ui_synth_scroll_dropdown_open");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.synth_inst_open  = true;
+    ui.synth_dd_scroll  = 5;
+    playlist_t pl = make_pl(0, -1);
+    /* dy=1 (scroll up) → dd_scroll decreases by 1. */
+    ui_on_scroll(&ui, 100.0f, (f32)(PL_Y + 4), 1.0f, 0.0f, &pl, APP_MODE_SYNTH);
+    CHECK(ui.synth_dd_scroll == 4);
+    /* dy=-1 (scroll down) → dd_scroll increases by 1. */
+    ui_on_scroll(&ui, 100.0f, (f32)(PL_Y + 4), -1.0f, 0.0f, &pl, APP_MODE_SYNTH);
+    CHECK(ui.synth_dd_scroll == 5);
     TEST_END();
 }
 
 static void test_ui_synth_hold_mouse_up_playing(void)
 {
     TEST_BEGIN("ui_synth_hold_mouse_up_playing");
+    /* With toggle model, mouse_up no longer stops play; NONE is returned. */
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.synth_playing = true;
     SDL_MouseButtonEvent e = make_btn(100.0f, 234.0f, SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_up(&ui, &e) == UI_ACTION_SYNTH_PLAY_STOP);
+    CHECK(ui_on_mouse_up(&ui, &e) == UI_ACTION_NONE);
     TEST_END();
 }
 
@@ -1247,6 +1353,61 @@ static void test_ui_draw_synth_all_notes(void)
     TEST_END();
 }
 
+static void test_ui_draw_synth_inst_dropdown(void)
+{
+    TEST_BEGIN("ui_draw_synth_inst_dropdown");
+    audio_t a    = make_draw_audio(AUDIO_STATUS_STOPPED);
+    spectrum_t s = make_flat_spectrum();
+    playlist_t pl = make_pl(0, -1);
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.synth_dd_hover  = -1;
+    ui.synth_inst      = 10;
+    ui.synth_inst_open = true;
+    ui.synth_dd_scroll = 8;
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    TEST_END();
+}
+
+static void test_ui_draw_synth_note_dropdown(void)
+{
+    TEST_BEGIN("ui_draw_synth_note_dropdown");
+    audio_t a    = make_draw_audio(AUDIO_STATUS_STOPPED);
+    spectrum_t s = make_flat_spectrum();
+    playlist_t pl = make_pl(0, -1);
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.synth_dd_hover  = -1;
+    ui.synth_note      = 69;
+    ui.synth_note_open = true;
+    ui.synth_dd_scroll = 65;
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    TEST_END();
+}
+
+static void test_ui_draw_header_artist(void)
+{
+    TEST_BEGIN("ui_draw_header_artist");
+    audio_t a    = make_draw_audio(AUDIO_STATUS_PLAYING);
+    spectrum_t s = make_flat_spectrum();
+    playlist_t pl = make_pl(1, 0);
+    SDL_strlcpy(pl.entries[0].artist, "Test Artist", (size_t)TITLE_MAX_LEN);
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    TEST_END();
+}
+
+static void test_ui_draw_header_synth_no_title(void)
+{
+    TEST_BEGIN("ui_draw_header_synth_no_title");
+    audio_t a    = make_draw_audio(AUDIO_STATUS_STOPPED);
+    spectrum_t s = make_flat_spectrum();
+    /* Has a current track, but synth mode — title must be suppressed. */
+    playlist_t pl = make_pl(1, 0);
+    SDL_strlcpy(pl.entries[0].artist, "SomeArtist", (size_t)TITLE_MAX_LEN);
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    TEST_END();
+}
+
 /* ── Suite ───────────────────────────────────────────────────────────────── */
 
 void run_ui_tests(void)
@@ -1297,7 +1458,13 @@ void run_ui_tests(void)
     test_ui_mouse_down_nowhere();
     test_ui_synth_inst_row_click();
     test_ui_synth_note_row_click();
-    test_ui_synth_hold_mouse_down();
+    test_ui_synth_panel_empty_area();
+    test_ui_synth_dd_sb_drag_start();
+    test_ui_synth_dd_sb_drag_motion();
+    test_ui_synth_dd_sb_drag_end();
+    test_ui_synth_dropdown_select_inst();
+    test_ui_synth_dropdown_close_outside();
+    test_ui_synth_scroll_dropdown_open();
     test_ui_synth_hold_mouse_up_playing();
     test_ui_synth_hold_mouse_up_not_playing();
     test_ui_synth_scroll_inst_up();
@@ -1366,6 +1533,10 @@ void run_ui_tests(void)
         test_ui_draw_synth_not_playing();
         test_ui_draw_synth_all_instruments();
         test_ui_draw_synth_all_notes();
+        test_ui_draw_synth_inst_dropdown();
+        test_ui_draw_synth_note_dropdown();
+        test_ui_draw_header_artist();
+        test_ui_draw_header_synth_no_title();
     }
 
     TTF_Quit();

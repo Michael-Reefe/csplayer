@@ -42,21 +42,25 @@
 #define FONT_H  8
 
 /* Mode toggle button in the header bar (immediately right of the app name). */
-#define MODE_BTN_X  70
+#define MODE_BTN_X  78    /* 8 px gap after "csplayer" which ends at x=68 */
 #define MODE_BTN_Y  2
-#define MODE_BTN_W  24
+#define MODE_BTN_W  96    /* fits "Mode: Synth" (11 chars × 8 px + 4 px padding each side) */
 #define MODE_BTN_H  16
 
 /* ── Internal: colour helpers ────────────────────────────────────────────── */
 
 static void set_col(SDL_Renderer *r, i32 rv, i32 gv, i32 bv, i32 av)
 {
+    assert(r != NULL);
+    assert(rv >= 0 && gv >= 0 && bv >= 0 && av >= 0);
     (void)SDL_SetRenderDrawColor(r, (Uint8)rv, (Uint8)gv, (Uint8)bv, (Uint8)av);
 }
 
 /* Draw a filled rectangle. */
 static void fill_rect(SDL_Renderer *r, f32 x, f32 y, f32 w, f32 h)
 {
+    assert(r != NULL);
+    assert(w >= 0.0f && h >= 0.0f);
     SDL_FRect rc = { x, y, w, h };
     (void)SDL_RenderFillRect(r, &rc);
 }
@@ -64,6 +68,8 @@ static void fill_rect(SDL_Renderer *r, f32 x, f32 y, f32 w, f32 h)
 /* Draw a rectangle outline (1 px border). */
 static void outline_rect(SDL_Renderer *r, f32 x, f32 y, f32 w, f32 h)
 {
+    assert(r != NULL);
+    assert(w >= 0.0f && h >= 0.0f);
     SDL_FRect rc = { x, y, w, h };
     (void)SDL_RenderRect(r, &rc);
 }
@@ -154,13 +160,222 @@ static i32 db_to_py(f32 db)
 
 /* ── Internal draw sub-functions ─────────────────────────────────────────── */
 
+/* Return the logical-pixel width of text rendered with font (ASCII fallback if NULL). */
+static f32 text_pixel_w(TTF_Font *font, const char *text)
+{
+    assert(text != NULL);
+    assert(FONT_W > 0);
+    if (text[0] == '\0') { return 0.0f; }
+    if (font == NULL)    { return (f32)((i32)SDL_strlen(text) * FONT_W); }
+    SDL_Color dummy = { 0, 0, 0, 0 };
+    SDL_Surface *surf = TTF_RenderText_Solid(font, text, (size_t)0, dummy);
+    if (surf == NULL)    { return (f32)((i32)SDL_strlen(text) * FONT_W); }
+    f32 w = (f32)surf->w / (f32)DISPLAY_SCALE;
+    SDL_DestroySurface(surf);
+    return w;
+}
+
+/* Marquee scroll speed (logical pixels/second) and pause at each end (ms). */
+#define MARQUEE_SPEED_PPS  25.0f
+#define MARQUEE_PAUSE_MS   2500u
+
+/*
+ * Update header marquee state for the current frame.
+ * track    — pl->current (used to detect track changes).
+ * overflow — how many pixels the full text exceeds the clip width; <= 0 = no scroll.
+ */
+static void update_marquee(ui_t *ui, i32 track, f32 overflow)
+{
+    assert(ui != NULL);
+    assert(MARQUEE_SPEED_PPS > 0.0f);
+
+    /* Reset on track change or when text fits. */
+    if (track != ui->marquee_track || overflow <= 0.0f) {
+        ui->marquee_x           = 0.0f;
+        ui->marquee_dir         = 0.0f;
+        ui->marquee_pause_until = 0;
+        ui->marquee_last_ms     = 0;
+        ui->marquee_track       = track;
+    }
+    if (overflow <= 0.0f) { return; }
+
+    Uint64 now = SDL_GetTicks();
+
+    /* First frame with overflow — seed state and start initial pause. */
+    if (ui->marquee_last_ms == 0) {
+        ui->marquee_last_ms     = now;
+        ui->marquee_dir         = 1.0f;
+        ui->marquee_pause_until = now + MARQUEE_PAUSE_MS;
+        return;
+    }
+
+    /* Still in a pause at one end — just update the clock, don't move. */
+    if (now < ui->marquee_pause_until) {
+        ui->marquee_last_ms = now;
+        return;
+    }
+
+    f32 dt = (f32)(now - ui->marquee_last_ms) / 1000.0f;
+    ui->marquee_last_ms = now;
+    if (dt > 0.1f) { dt = 0.1f; }   /* cap to avoid jump after pause/sleep */
+
+    ui->marquee_x += ui->marquee_dir * MARQUEE_SPEED_PPS * dt;
+
+    if (ui->marquee_dir > 0.0f && ui->marquee_x >= overflow) {
+        ui->marquee_x           = overflow;
+        ui->marquee_dir         = -1.0f;
+        ui->marquee_pause_until = now + MARQUEE_PAUSE_MS;
+    } else if (ui->marquee_dir < 0.0f && ui->marquee_x <= 0.0f) {
+        ui->marquee_x           = 0.0f;
+        ui->marquee_dir         = 1.0f;
+        ui->marquee_pause_until = now + MARQUEE_PAUSE_MS;
+    }
+}
+
+/* ── Internal: header title texture cache (Rule 3: no per-frame TTF alloc) ── */
+
+/* Build a TTF texture from a UTF-8 string; NULL on empty/font=NULL/error. */
+static SDL_Texture *build_text_tex(SDL_Renderer *r, TTF_Font *font,
+                                    const char *text,
+                                    i32 rv, i32 gv, i32 bv, i32 av)
+{
+    assert(r    != NULL);
+    assert(text != NULL);
+    if (text[0] == '\0' || font == NULL) { return NULL; }
+    SDL_Color col = { (Uint8)rv, (Uint8)gv, (Uint8)bv, (Uint8)av };
+    SDL_Surface *surf = TTF_RenderText_Solid(font, text, (size_t)0, col);
+    if (surf == NULL) { return NULL; }
+    SDL_Texture *tex = SDL_CreateTextureFromSurface(r, surf);
+    SDL_DestroySurface(surf);
+    if (tex == NULL) { return NULL; }
+    (void)SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    (void)SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
+    return tex;
+}
+
+/* Return the logical-pixel width of a pre-built texture (0.0 if NULL). */
+static f32 tex_logical_w(SDL_Texture *tex)
+{
+    assert(tex != NULL);
+    assert(DISPLAY_SCALE > 0);
+    f32 w = 0.0f;
+    (void)SDL_GetTextureSize(tex, &w, NULL);
+    return w / (f32)DISPLAY_SCALE;
+}
+
+/* Render a pre-built texture at logical coordinates. */
+static void render_tex_at(SDL_Renderer *r, SDL_Texture *tex, f32 x, f32 y)
+{
+    assert(r   != NULL);
+    assert(tex != NULL);
+    f32 tw = 0.0f, th = 0.0f;
+    (void)SDL_GetTextureSize(tex, &tw, &th);
+    SDL_FRect dst = { x, y, tw / (f32)DISPLAY_SCALE, th / (f32)DISPLAY_SCALE };
+    (void)SDL_RenderTexture(r, tex, NULL, &dst);
+}
+
+/*
+ * Rebuild cached title/artist textures when the displayed text changes.
+ * Called at most once per track change, never in the steady-state render loop.
+ */
+static void rebuild_hdr_tex_cache(SDL_Renderer *r, ui_t *ui,
+                                   const char *title, const char *artist)
+{
+    assert(r      != NULL);
+    assert(ui     != NULL);
+    assert(title  != NULL);
+    assert(artist != NULL);
+    if (ui->hdr_title_tex  != NULL) { SDL_DestroyTexture(ui->hdr_title_tex);  }
+    if (ui->hdr_artist_tex != NULL) { SDL_DestroyTexture(ui->hdr_artist_tex); }
+
+    ui->hdr_title_tex = build_text_tex(r, ui->font, title, COL_TEXT);
+    ui->hdr_title_w   = (ui->hdr_title_tex != NULL)
+                            ? tex_logical_w(ui->hdr_title_tex)
+                            : text_pixel_w(ui->font, title);
+    (void)SDL_strlcpy(ui->hdr_cache_title, title, sizeof(ui->hdr_cache_title));
+
+    ui->hdr_artist_tex     = NULL;
+    ui->hdr_artist_w       = 0.0f;
+    ui->hdr_cache_artist[0] = '\0';
+    if (artist[0] != '\0') {
+        char sep[TITLE_MAX_LEN + 4];
+        (void)SDL_snprintf(sep, sizeof(sep), " - %s", artist);
+        ui->hdr_artist_tex = build_text_tex(r, ui->font, sep, COL_DIM);
+        ui->hdr_artist_w   = (ui->hdr_artist_tex != NULL)
+                                 ? tex_logical_w(ui->hdr_artist_tex)
+                                 : text_pixel_w(ui->font, sep);
+        (void)SDL_strlcpy(ui->hdr_cache_artist, artist, sizeof(ui->hdr_cache_artist));
+    }
+}
+
+/*
+ * Render the current track's title and artist into the header clip area.
+ * Uses cached textures when a TTF font is loaded (Rule 3: no per-frame alloc).
+ */
+static void draw_header_title(SDL_Renderer *r, const playlist_t *pl,
+                               ui_t *ui, i32 title_x, i32 clip_w)
+{
+    assert(r  != NULL);
+    assert(pl != NULL);
+    assert(ui != NULL);
+
+    const char *title  = pl->entries[pl->current].title;
+    const char *artist = pl->entries[pl->current].artist;
+
+    /* Rebuild only when text changes — not every frame. */
+    if (ui->font != NULL &&
+        (ui->hdr_title_tex == NULL ||
+         SDL_strcmp(title,  ui->hdr_cache_title)  != 0 ||
+         SDL_strcmp(artist, ui->hdr_cache_artist) != 0)) {
+        rebuild_hdr_tex_cache(r, ui, title, artist);
+    }
+
+    f32 title_w, total_w;
+    if (ui->font != NULL) {
+        title_w = ui->hdr_title_w;
+        total_w = title_w + ui->hdr_artist_w;
+    } else {
+        title_w = text_pixel_w(NULL, title);
+        total_w = title_w;
+        if (artist[0] != '\0') {
+            char sep[TITLE_MAX_LEN + 4];
+            SDL_snprintf(sep, sizeof(sep), " - %s", artist);
+            total_w += text_pixel_w(NULL, sep);
+        }
+    }
+    update_marquee(ui, pl->current, total_w - (f32)clip_w);
+
+    SDL_Rect clip = { title_x, HDR_Y, clip_w, HDR_H };
+    (void)SDL_SetRenderClipRect(r, &clip);
+    f32 rx = (f32)title_x - ui->marquee_x;
+
+    if (ui->font != NULL) {
+        if (ui->hdr_title_tex  != NULL) {
+            render_tex_at(r, ui->hdr_title_tex, rx, (f32)(HDR_Y + 6));
+        }
+        if (ui->hdr_artist_tex != NULL) {
+            render_tex_at(r, ui->hdr_artist_tex, rx + title_w, (f32)(HDR_Y + 6));
+        }
+    } else {
+        set_col(r, COL_TEXT);
+        (void)SDL_RenderDebugText(r, rx, (f32)(HDR_Y + 6), title);
+        if (artist[0] != '\0') {
+            char sep[TITLE_MAX_LEN + 4];
+            SDL_snprintf(sep, sizeof(sep), " - %s", artist);
+            set_col(r, COL_DIM);
+            (void)SDL_RenderDebugText(r, rx + title_w, (f32)(HDR_Y + 6), sep);
+        }
+    }
+    (void)SDL_SetRenderClipRect(r, NULL);
+}
+
 /*
  * Draw the header bar: dark background, app name, current track title
  * and elapsed / total time.
  */
 static void draw_header(SDL_Renderer *r,
                          const audio_t *audio, const playlist_t *pl,
-                         const ui_t *ui, app_mode_t mode)
+                         ui_t *ui, app_mode_t mode)
 {
     assert(r     != NULL);
     assert(audio != NULL);
@@ -181,8 +396,9 @@ static void draw_header(SDL_Renderer *r,
     set_col(r, COL_BORDER);
     outline_rect(r, (f32)MODE_BTN_X, (f32)MODE_BTN_Y, (f32)MODE_BTN_W, (f32)MODE_BTN_H);
     {
-        const char *mode_label = (mode == APP_MODE_PLAYER) ? "PLY" : "SYN";
-        f32 mlx = (f32)(MODE_BTN_X + (MODE_BTN_W - 3 * FONT_W) / 2);
+        const char *mode_label = (mode == APP_MODE_PLAYER) ? "Mode: Play" : "Mode: Synth";
+        i32 label_len = (i32)SDL_strlen(mode_label);
+        f32 mlx = (f32)(MODE_BTN_X + (MODE_BTN_W - label_len * FONT_W) / 2);
         f32 mly = (f32)(MODE_BTN_Y + (MODE_BTN_H - FONT_H) / 2);
         set_col(r, COL_TEXT);
         (void)SDL_RenderDebugText(r, mlx, mly, mode_label);
@@ -201,17 +417,11 @@ static void draw_header(SDL_Renderer *r,
     i32 tlen = (i32)SDL_strlen(timebuf);
     f32 tx   = (f32)(LOG_W - tlen * FONT_W - 4);
 
-    /* Track title — clip to the gap between mode button and time display. */
-    if (pl->current >= 0 && pl->current < pl->count) {
-        i32 title_x = MODE_BTN_X + MODE_BTN_W + 4;
+    /* Track title — player mode only, clip between mode button and time display. */
+    if (mode == APP_MODE_PLAYER && pl->current >= 0 && pl->current < pl->count) {
+        i32 title_x = MODE_BTN_X + MODE_BTN_W + 8;
         i32 clip_w  = (i32)tx - title_x - 4;
-        if (clip_w > 0) {
-            SDL_Rect clip = { title_x, HDR_Y, clip_w, HDR_H };
-            (void)SDL_SetRenderClipRect(r, &clip);
-            render_utf8(r, ui->font, pl->entries[pl->current].title,
-                        (f32)title_x, (f32)(HDR_Y + 6), COL_TEXT);
-            (void)SDL_SetRenderClipRect(r, NULL);
-        }
+        if (clip_w > 0) { draw_header_title(r, pl, ui, title_x, clip_w); }
     }
 
     /* Elapsed / total time (right-aligned, ASCII). */
@@ -225,6 +435,7 @@ static void draw_header(SDL_Renderer *r,
 static void draw_spectrum_axes(SDL_Renderer *r)
 {
     assert(r != NULL);
+    assert(NUM_FREQ_TICKS > 0);
 
     /* Plot background */
     set_col(r, COL_PANEL);
@@ -244,7 +455,6 @@ static void draw_spectrum_axes(SDL_Renderer *r)
     /* dB labels + grid lines — only the top (0 dB) and bottom (-90 dB)
      * edges get a full-width horizontal line; the middle two are label-only. */
     for (i32 t = 0; t < NUM_DB_TICKS; t++) {
-        assert(t < NUM_DB_TICKS);
         i32 py = db_to_py(db_ticks[t]);
 
         if (t == 0 || t == NUM_DB_TICKS - 1) {
@@ -266,7 +476,6 @@ static void draw_spectrum_axes(SDL_Renderer *r)
     /* Frequency tick marks + labels inside the bottom of the plot.
      * Ticks point upward from the bottom edge; labels sit just above them. */
     for (i32 t = 0; t < NUM_FREQ_TICKS; t++) {
-        assert(t < NUM_FREQ_TICKS);
         i32 px = freq_to_px(freq_ticks[t]);
         if (px < 0) { continue; }
 
@@ -304,7 +513,7 @@ static void fmt_time(char *buf, size_t bufsz, f64 sec)
     assert(bufsz >= 8);
     i32 m = (i32)(sec / 60.0);
     i32 s = (i32)sec % 60;
-    SDL_snprintf(buf, bufsz, "%d:%02d", m, s);
+    (void)SDL_snprintf(buf, bufsz, "%d:%02d", m, s);
 }
 
 /*
@@ -393,6 +602,41 @@ static void draw_controls(SDL_Renderer *r, const audio_t *audio, const ui_t *ui)
     outline_rect(r, (f32)SEEK_X, (f32)SEEK_Y, (f32)SEEK_W, (f32)SEEK_H);
 }
 
+static void draw_pl_row_text(SDL_Renderer *r, const playlist_t *pl,
+                              const ui_t *ui, i32 idx, i32 x_title, i32 ry, i32 ty)
+{
+    assert(r  != NULL);
+    assert(pl != NULL);
+    assert(ui != NULL);
+
+    char tbuf[12];
+    i32  tlen = 0;
+    if (pl->entries[idx].duration_sec > 0.0) {
+        fmt_time(tbuf, sizeof(tbuf), pl->entries[idx].duration_sec);
+        tlen = (i32)SDL_strlen(tbuf);
+    }
+
+    i32 clip_right = (tlen > 0) ? PL_DEL_X - tlen * FONT_W - 8 : PL_DEL_X - 4;
+    i32 clip_w     = clip_right - x_title;
+    if (clip_w > 0) {
+        SDL_Rect title_clip = { x_title, ry, clip_w, PL_ROW };
+        (void)SDL_SetRenderClipRect(r, &title_clip);
+        render_utf8(r, ui->font, pl->entries[idx].title,
+                    (f32)x_title, (f32)ty, COL_TEXT);
+        (void)SDL_SetRenderClipRect(r, NULL);
+    }
+
+    if (tlen > 0) {
+        f32 tx = (f32)(PL_DEL_X - tlen * FONT_W - 4);
+        set_col(r, COL_DIM);
+        (void)SDL_RenderDebugText(r, tx, (f32)ty, tbuf);
+    }
+
+    f32 dx = (f32)(PL_DEL_X + (PL_DEL_W - FONT_W) / 2);
+    set_col(r, COL_DIM);
+    (void)SDL_RenderDebugText(r, dx, (f32)ty, "x");
+}
+
 /*
  * Draw a single playlist row (track number, title, duration, delete button).
  */
@@ -432,35 +676,7 @@ static void draw_playlist_row(SDL_Renderer *r, const playlist_t *pl,
     set_col(r, COL_DIM);
     (void)SDL_RenderDebugText(r, (f32)x_num, (f32)ty, numbuf);
 
-    /* Pre-compute duration text so the title clip can reserve space for it. */
-    char tbuf[12];
-    i32  tlen = 0;
-    if (pl->entries[idx].duration_sec > 0.0) {
-        fmt_time(tbuf, sizeof(tbuf), pl->entries[idx].duration_sec);
-        tlen = (i32)SDL_strlen(tbuf);
-    }
-
-    /* Title clips to stop before the duration string (4 px gap on each side)
-     * or before the delete button when no duration is shown. */
-    i32 clip_right = (tlen > 0) ? PL_DEL_X - tlen * FONT_W - 8 : PL_DEL_X - 4;
-    i32 clip_w     = clip_right - x_title;
-    if (clip_w > 0) {
-        SDL_Rect title_clip = { x_title, ry, clip_w, PL_ROW };
-        (void)SDL_SetRenderClipRect(r, &title_clip);
-        render_utf8(r, ui->font, pl->entries[idx].title,
-                    (f32)x_title, (f32)ty, COL_TEXT);
-        (void)SDL_SetRenderClipRect(r, NULL);
-    }
-
-    if (tlen > 0) {
-        f32 tx = (f32)(PL_DEL_X - tlen * FONT_W - 4);
-        set_col(r, COL_DIM);
-        (void)SDL_RenderDebugText(r, tx, (f32)ty, tbuf);
-    }
-
-    f32 dx = (f32)(PL_DEL_X + (PL_DEL_W - FONT_W) / 2);
-    set_col(r, COL_DIM);
-    (void)SDL_RenderDebugText(r, dx, (f32)ty, "x");
+    draw_pl_row_text(r, pl, ui, idx, x_title, ry, ty);
 }
 
 /*
@@ -506,7 +722,6 @@ static void draw_playlist(SDL_Renderer *r, const playlist_t *pl, const ui_t *ui)
     assert(visible > 0);
 
     for (i32 row = 0; row < visible; row++) {
-        assert(row < visible);
         i32 idx = pl->scroll + row;
         if (idx >= pl->count) { break; }
         draw_playlist_row(r, pl, ui, idx, row);
@@ -530,8 +745,20 @@ static void draw_playlist(SDL_Renderer *r, const playlist_t *pl, const ui_t *ui)
     (void)SDL_RenderDebugText(r, lx, ly, "+");
 }
 
+/* ── Synth dropdown geometry ─────────────────────────────────────────────── */
+
+#define DD_ROWS_VISIBLE  4
+#define DD_ROW_H         PL_ROW                          /* 16 px */
+#define DD_H             (DD_ROWS_VISIBLE * DD_ROW_H)   /* 64 px */
+#define DD_SB_W          5                               /* scrollbar strip width */
+
+/* Instrument dropdown starts immediately below row 0. */
+#define DD_INST_Y  (PL_Y + 16)
+/* Note dropdown: PL_Y+32+64=290 overflows LOG_H=288, so pin to bottom. */
+#define DD_NOTE_Y  (LOG_H - DD_H)
+
 /*
- * Draw the synthesiser panel (instrument name, note name, HOLD TO PLAY button).
+ * Draw the synthesiser panel (instrument name, note name, PLAY/STOP button).
  * Occupies the same pixel region as the playlist panel.
  */
 static void draw_synth_panel(SDL_Renderer *r, const ui_t *ui, const synth_t *synth)
@@ -547,52 +774,125 @@ static void draw_synth_panel(SDL_Renderer *r, const ui_t *ui, const synth_t *syn
     (void)SDL_RenderLine(r, 0.0f, (f32)PL_Y, (f32)LOG_W, (f32)PL_Y);
     (void)SDL_RenderLine(r, 0.0f, (f32)(PL_Y + PL_H), (f32)LOG_W, (f32)(PL_Y + PL_H));
 
-    /* Row 0: instrument name */
+    /* Row 0: instrument name + open/close indicator */
     {
         char inst_name[64];
         char label[80];
         synth_instrument_name(ui->synth_inst, inst_name, (i32)sizeof(inst_name));
         SDL_snprintf(label, sizeof(label), "INST: %s", inst_name);
         i32 ty = PL_Y + (16 - FONT_H) / 2;
-        SDL_Rect clip = { 4, PL_Y, LOG_W - 8, 16 };
+        /* Leave 2 chars + 4 px on the right for the indicator. */
+        SDL_Rect clip = { 4, PL_Y, LOG_W - 8 - 2 * FONT_W - 4, 16 };
         (void)SDL_SetRenderClipRect(r, &clip);
         set_col(r, COL_TEXT);
         (void)SDL_RenderDebugText(r, 4.0f, (f32)ty, label);
         (void)SDL_SetRenderClipRect(r, NULL);
+        set_col(r, COL_DIM);
+        (void)SDL_RenderDebugText(r, (f32)(LOG_W - 4 - 2 * FONT_W), (f32)ty,
+                                   ui->synth_inst_open ? " ^" : " v");
     }
 
     set_col(r, COL_BORDER);
     (void)SDL_RenderLine(r, 0.0f, (f32)(PL_Y + 16), (f32)LOG_W, (f32)(PL_Y + 16));
 
-    /* Row 1: note name */
+    /* Row 1: note name + open/close indicator */
     {
         char note_name[8];
         char label[24];
         synth_note_name(ui->synth_note, note_name, (i32)sizeof(note_name));
         SDL_snprintf(label, sizeof(label), "NOTE: %s", note_name);
         i32 ty = PL_Y + 16 + (16 - FONT_H) / 2;
+        SDL_Rect clip = { 4, PL_Y + 16, LOG_W - 8 - 2 * FONT_W - 4, 16 };
+        (void)SDL_SetRenderClipRect(r, &clip);
         set_col(r, COL_TEXT);
         (void)SDL_RenderDebugText(r, 4.0f, (f32)ty, label);
+        (void)SDL_SetRenderClipRect(r, NULL);
+        set_col(r, COL_DIM);
+        (void)SDL_RenderDebugText(r, (f32)(LOG_W - 4 - 2 * FONT_W), (f32)ty,
+                                   ui->synth_note_open ? " ^" : " v");
     }
 
+}
+
+static void draw_dd_scrollbar(SDL_Renderer *r, i32 sb_x, i32 dd_y,
+                               i32 item_count, i32 dd_scroll)
+{
+    assert(r != NULL);
+    assert(item_count > DD_ROWS_VISIBLE);
+    i32 max_scroll = item_count - DD_ROWS_VISIBLE;
+    set_col(r, COL_SCRUB_BG);
+    fill_rect(r, (f32)sb_x, (f32)dd_y, (f32)DD_SB_W, (f32)DD_H);
+    if (max_scroll > 0) {
+        f32 thumb_h = (f32)DD_H * (f32)DD_ROWS_VISIBLE / (f32)item_count;
+        if (thumb_h < 4.0f) { thumb_h = 4.0f; }
+        f32 travel  = (f32)DD_H - thumb_h;
+        f32 thumb_y = (f32)dd_y + ((f32)dd_scroll / (f32)max_scroll) * travel;
+        set_col(r, COL_DIM);
+        fill_rect(r, (f32)sb_x, thumb_y, (f32)DD_SB_W, thumb_h);
+    }
+}
+
+/*
+ * Draw whichever dropdown (instrument or note) is currently open.
+ * Called after draw_controls so the dropdown overlays everything.
+ */
+static void draw_synth_dropdowns(SDL_Renderer *r, ui_t *ui)
+{
+    assert(r  != NULL);
+    assert(ui != NULL);
+
+    if (!ui->synth_inst_open && !ui->synth_note_open) { return; }
+
+    bool is_inst    = ui->synth_inst_open;
+    i32  selected   = is_inst ? ui->synth_inst  : ui->synth_note;
+    i32  dd_scroll  = ui->synth_dd_scroll;
+    i32  dd_x       = 4;
+    i32  dd_w       = LOG_W - 8;
+    i32  dd_y       = is_inst ? DD_INST_Y : DD_NOTE_Y;
+    i32  item_count = is_inst ? SYNTH_INSTRUMENTS : SYNTH_NOTES;
+    i32  text_x     = dd_x + 2;
+    i32  item_area  = dd_w - DD_SB_W;
+
+    set_col(r, COL_PANEL);
+    fill_rect(r, (f32)dd_x, (f32)dd_y, (f32)dd_w, (f32)DD_H);
     set_col(r, COL_BORDER);
-    (void)SDL_RenderLine(r, 0.0f, (f32)(PL_Y + 32), (f32)LOG_W, (f32)(PL_Y + 32));
+    outline_rect(r, (f32)dd_x, (f32)dd_y, (f32)dd_w, (f32)DD_H);
 
-    /* Row 2: HOLD TO PLAY button */
-    {
-        i32 hold_y = PL_Y + 32;
-        i32 hold_h = PL_H - 32;
-        if (ui->synth_playing) { set_col(r, COL_BTN_HOT); } else { set_col(r, COL_BTN); }
-        fill_rect(r, 4.0f, (f32)hold_y, (f32)(LOG_W - 8), (f32)hold_h);
-        set_col(r, COL_BORDER);
-        outline_rect(r, 4.0f, (f32)hold_y, (f32)(LOG_W - 8), (f32)hold_h);
-        const char *hold_label = "HOLD TO PLAY";
-        i32 hlen = (i32)SDL_strlen(hold_label);
-        f32 hlx  = (f32)((LOG_W - hlen * FONT_W) / 2);
-        f32 hly  = (f32)(hold_y + (hold_h - FONT_H) / 2);
+    for (i32 row = 0; row < DD_ROWS_VISIBLE; row++) {
+        i32 item  = dd_scroll + row;
+        if (item >= item_count) { break; }
+        i32 row_y = dd_y + row * DD_ROW_H;
+        i32 ty    = row_y + (DD_ROW_H - FONT_H) / 2;
+
+        if (item == selected) {
+            set_col(r, COL_BTN);
+            fill_rect(r, (f32)dd_x, (f32)row_y, (f32)item_area, (f32)DD_ROW_H);
+        }
+        if (item == ui->synth_dd_hover) {
+            set_col(r, COL_BTN_HOT);
+            fill_rect(r, (f32)dd_x, (f32)row_y, (f32)item_area, (f32)DD_ROW_H);
+        }
+
+        char name_buf[64];
+        if (is_inst) {
+            synth_instrument_name(item, name_buf, (i32)sizeof(name_buf));
+        } else {
+            synth_note_name(item, name_buf, (i32)sizeof(name_buf));
+        }
+        SDL_Rect item_clip = { dd_x, row_y, item_area, DD_ROW_H };
+        (void)SDL_SetRenderClipRect(r, &item_clip);
         set_col(r, COL_TEXT);
-        (void)SDL_RenderDebugText(r, hlx, hly, hold_label);
+        (void)SDL_RenderDebugText(r, (f32)text_x, (f32)ty, name_buf);
+        (void)SDL_SetRenderClipRect(r, NULL);
+
+        if (row < DD_ROWS_VISIBLE - 1) {
+            set_col(r, COL_BORDER);
+            (void)SDL_RenderLine(r, (f32)dd_x, (f32)(row_y + DD_ROW_H),
+                                    (f32)(dd_x + item_area), (f32)(row_y + DD_ROW_H));
+        }
     }
+
+    draw_dd_scrollbar(r, dd_x + dd_w - DD_SB_W, dd_y, item_count, dd_scroll);
 }
 
 /* ── Public interface ────────────────────────────────────────────────────── */
@@ -630,6 +930,11 @@ void ui_draw(SDL_Renderer       *r,
 
     draw_controls(r, audio, ui);
 
+    /* Dropdowns overlay everything — drawn last. */
+    if (mode == APP_MODE_SYNTH) {
+        draw_synth_dropdowns(r, ui);
+    }
+
     (void)SDL_RenderPresent(r);
 }
 
@@ -641,6 +946,8 @@ void ui_draw(SDL_Renderer       *r,
  */
 static bool in_button(i32 btn_idx, f32 lx, f32 ly)
 {
+    assert(btn_idx >= 0 && btn_idx <= 2);
+    assert(BTN_SZ > 0);
     i32 bx = 4 + btn_idx * (BTN_SZ + BTN_GAP);
     i32 by = CTRL_Y + 2;
     return (lx >= (f32)bx && lx < (f32)(bx + BTN_SZ) &&
@@ -649,12 +956,16 @@ static bool in_button(i32 btn_idx, f32 lx, f32 ly)
 
 static bool in_seek_bar(f32 lx, f32 ly)
 {
+    assert(SEEK_W > 0);
+    assert(SEEK_H > 0);
     return (lx >= (f32)SEEK_X && lx < (f32)(SEEK_X + SEEK_W) &&
             ly >= (f32)SEEK_Y && ly < (f32)(SEEK_Y + SEEK_H));
 }
 
 static bool in_vol_slider(f32 lx, f32 ly)
 {
+    assert(VOL_W > 0);
+    assert(VOL_H > 0);
     return (lx >= (f32)VOL_X && lx < (f32)(VOL_X + VOL_W) &&
             ly >= (f32)VOL_Y && ly < (f32)(VOL_Y + VOL_H));
 }
@@ -663,6 +974,8 @@ static i32  pl_row_at(f32 lx, f32 ly, const playlist_t *pl);  /* forward */
 
 static bool in_pl_sb(f32 lx, f32 ly)
 {
+    assert(PL_SB_W > 0);
+    assert(PL_H    > 0);
     return (lx >= (f32)PL_SB_X && lx < (f32)(PL_SB_X + PL_SB_W) &&
             ly >= (f32)PL_Y    && ly < (f32)(PL_Y + PL_H));
 }
@@ -689,12 +1002,15 @@ static i32 sb_pos_to_scroll(f32 ly, i32 count)
 static bool in_pl_del(f32 lx, f32 ly, const playlist_t *pl)
 {
     assert(pl != NULL);
+    assert(PL_DEL_W > 0);
     if (lx < (f32)PL_DEL_X || lx >= (f32)(PL_DEL_X + PL_DEL_W)) { return false; }
     return pl_row_at(lx, ly, pl) >= 0;
 }
 
 static bool in_add_button(f32 lx, f32 ly)
 {
+    assert(PL_ADD_SZ > 0);
+    assert(PL_ADD_X  >= 0);
     return (lx >= (f32)PL_ADD_X && lx < (f32)(PL_ADD_X + PL_ADD_SZ) &&
             ly >= (f32)(PL_Y + 1) && ly < (f32)(PL_Y + 1 + PL_ADD_SZ));
 }
@@ -703,26 +1019,26 @@ static bool in_add_button(f32 lx, f32 ly)
 
 static bool in_mode_btn(f32 lx, f32 ly)
 {
+    assert(MODE_BTN_W > 0);
+    assert(MODE_BTN_H > 0);
     return (lx >= (f32)MODE_BTN_X && lx < (f32)(MODE_BTN_X + MODE_BTN_W) &&
             ly >= (f32)MODE_BTN_Y && ly < (f32)(MODE_BTN_Y + MODE_BTN_H));
 }
 
 static bool in_synth_inst_row(f32 lx, f32 ly)
 {
+    assert(PL_Y >= 0);
+    assert(PL_ROW > 0);
     (void)lx;
-    return (ly >= (f32)PL_Y && ly < (f32)(PL_Y + 16));
+    return (ly >= (f32)PL_Y && ly < (f32)(PL_Y + PL_ROW));
 }
 
 static bool in_synth_note_row(f32 lx, f32 ly)
 {
+    assert(PL_Y   >= 0);
+    assert(PL_ROW >  0);
     (void)lx;
-    return (ly >= (f32)(PL_Y + 16) && ly < (f32)(PL_Y + 32));
-}
-
-static bool in_synth_hold_btn(f32 lx, f32 ly)
-{
-    return (lx >= 4.0f && lx < (f32)(LOG_W - 4) &&
-            ly >= (f32)(PL_Y + 32) && ly < (f32)(PL_Y + PL_H));
+    return (ly >= (f32)(PL_Y + PL_ROW) && ly < (f32)(PL_Y + 2 * PL_ROW));
 }
 
 /*
@@ -731,6 +1047,7 @@ static bool in_synth_hold_btn(f32 lx, f32 ly)
 static i32 pl_row_at(f32 lx, f32 ly, const playlist_t *pl)
 {
     assert(pl != NULL);
+    assert(PL_ROW > 0);
     (void)lx;
 
     if (ly < (f32)PL_Y || ly >= (f32)(PL_Y + PL_H)) { return -1; }
@@ -739,6 +1056,86 @@ static i32 pl_row_at(f32 lx, f32 ly, const playlist_t *pl)
     i32 idx = pl->scroll + row;
     if (idx < 0 || idx >= pl->count) { return -1; }
     return idx;
+}
+
+static ui_action_t mouse_down_dd(ui_t *ui, f32 lx, f32 ly, bool is_inst)
+{
+    assert(ui != NULL);
+    assert(DD_ROWS_VISIBLE > 0);
+    i32 dd_y       = is_inst ? DD_INST_Y : DD_NOTE_Y;
+    i32 item_count = is_inst ? SYNTH_INSTRUMENTS : SYNTH_NOTES;
+    if (lx >= 4.0f && lx < (f32)(LOG_W - 4) &&
+        ly >= (f32)dd_y && ly < (f32)(dd_y + DD_H)) {
+        if (lx < (f32)(LOG_W - 4 - DD_SB_W)) {
+            i32 row  = (i32)(ly - (f32)dd_y) / DD_ROW_H;
+            i32 item = ui->synth_dd_scroll + row;
+            if (item >= 0 && item < item_count) {
+                ui->synth_dd_select = item;
+                if (is_inst) { ui->synth_inst_open = false; }
+                else         { ui->synth_note_open = false; }
+                ui->synth_dd_hover = -1;
+                return is_inst ? UI_ACTION_SYNTH_INST_SET : UI_ACTION_SYNTH_NOTE_SET;
+            }
+        } else {
+            i32 max_scroll = item_count - DD_ROWS_VISIBLE;
+            f32 t = (ly - (f32)dd_y) / (f32)DD_H;
+            if (t < 0.0f) { t = 0.0f; }
+            if (t > 1.0f) { t = 1.0f; }
+            ui->synth_dd_scroll = (i32)(t * (f32)max_scroll + 0.5f);
+            if (ui->synth_dd_scroll < 0)          { ui->synth_dd_scroll = 0; }
+            if (ui->synth_dd_scroll > max_scroll) { ui->synth_dd_scroll = max_scroll; }
+            ui->synth_dd_sb_dragging = true;
+        }
+    } else {
+        if (is_inst) { ui->synth_inst_open = false; }
+        else         { ui->synth_note_open = false; }
+        ui->synth_dd_hover = -1;
+    }
+    return UI_ACTION_NONE;
+}
+
+static ui_action_t mouse_down_synth(ui_t *ui, f32 lx, f32 ly)
+{
+    assert(ui != NULL);
+    assert(SYNTH_INSTRUMENTS > 0);
+    if (ui->synth_inst_open) { return mouse_down_dd(ui, lx, ly, true);  }
+    if (ui->synth_note_open) { return mouse_down_dd(ui, lx, ly, false); }
+    if (in_synth_inst_row(lx, ly)) {
+        ui->synth_inst_open = true;
+        i32 s = ui->synth_inst > 0 ? ui->synth_inst - 1 : 0;
+        if (s > SYNTH_INSTRUMENTS - DD_ROWS_VISIBLE) { s = SYNTH_INSTRUMENTS - DD_ROWS_VISIBLE; }
+        ui->synth_dd_scroll = s;
+        ui->synth_dd_hover  = -1;
+        return UI_ACTION_NONE;
+    }
+    if (in_synth_note_row(lx, ly)) {
+        ui->synth_note_open = true;
+        i32 s = ui->synth_note > 0 ? ui->synth_note - 1 : 0;
+        if (s > SYNTH_NOTES - DD_ROWS_VISIBLE) { s = SYNTH_NOTES - DD_ROWS_VISIBLE; }
+        ui->synth_dd_scroll = s;
+        ui->synth_dd_hover  = -1;
+        return UI_ACTION_NONE;
+    }
+    return UI_ACTION_NONE;
+}
+
+static ui_action_t mouse_down_player(ui_t *ui, f32 lx, f32 ly, playlist_t *pl)
+{
+    assert(ui != NULL);
+    assert(pl != NULL);
+    if (in_add_button(lx, ly) && !ui->dialog_open) { return UI_ACTION_OPEN_DIALOG; }
+    if (in_pl_sb(lx, ly)) {
+        ui->sb_dragging = true;
+        if (pl->count > 0) { pl->scroll = sb_pos_to_scroll(ly, pl->count); }
+        return UI_ACTION_NONE;
+    }
+    if (in_pl_del(lx, ly, pl)) {
+        ui->pl_hover = pl_row_at(lx, ly, pl);
+        return UI_ACTION_PL_REMOVE;
+    }
+    i32 row = pl_row_at(lx, ly, pl);
+    if (row >= 0) { ui->pl_hover = row; return UI_ACTION_PL_SELECT; }
+    return UI_ACTION_NONE;
 }
 
 ui_action_t ui_on_mouse_down(ui_t *ui, const SDL_MouseButtonEvent *e,
@@ -780,38 +1177,29 @@ ui_action_t ui_on_mouse_down(ui_t *ui, const SDL_MouseButtonEvent *e,
         return UI_ACTION_SEEK;
     }
 
-    if (mode == APP_MODE_SYNTH) {
-        if (in_synth_inst_row(lx, ly)) { return UI_ACTION_SYNTH_INST_UP;    }
-        if (in_synth_note_row(lx, ly)) { return UI_ACTION_SYNTH_NOTE_UP;    }
-        if (in_synth_hold_btn(lx, ly)) { return UI_ACTION_SYNTH_PLAY_START; }
-        return UI_ACTION_NONE;
-    }
+    if (mode == APP_MODE_SYNTH) { return mouse_down_synth(ui, lx, ly); }
+    return mouse_down_player(ui, lx, ly, pl);
+}
 
-    /* Player mode — playlist panel input. */
-    if (in_add_button(lx, ly) && !ui->dialog_open) {
-        return UI_ACTION_OPEN_DIALOG;
-    }
-
-    if (in_pl_sb(lx, ly)) {
-        ui->sb_dragging = true;
-        if (pl->count > 0) {
-            pl->scroll = sb_pos_to_scroll(ly, pl->count);
+static void motion_update_dd_hover(ui_t *ui, f32 lx, f32 ly)
+{
+    assert(ui != NULL);
+    assert(DD_ROW_H > 0);
+    if (ui->synth_inst_open) {
+        if (lx >= 4.0f && lx < (f32)(LOG_W - 4 - DD_SB_W) &&
+            ly >= (f32)DD_INST_Y && ly < (f32)(DD_INST_Y + DD_H)) {
+            ui->synth_dd_hover = ui->synth_dd_scroll + (i32)(ly - (f32)DD_INST_Y) / DD_ROW_H;
+        } else {
+            ui->synth_dd_hover = -1;
         }
-        return UI_ACTION_NONE;
+    } else if (ui->synth_note_open) {
+        if (lx >= 4.0f && lx < (f32)(LOG_W - 4 - DD_SB_W) &&
+            ly >= (f32)DD_NOTE_Y && ly < (f32)(DD_NOTE_Y + DD_H)) {
+            ui->synth_dd_hover = ui->synth_dd_scroll + (i32)(ly - (f32)DD_NOTE_Y) / DD_ROW_H;
+        } else {
+            ui->synth_dd_hover = -1;
+        }
     }
-
-    if (in_pl_del(lx, ly, pl)) {
-        ui->pl_hover = pl_row_at(lx, ly, pl);
-        return UI_ACTION_PL_REMOVE;
-    }
-
-    i32 row = pl_row_at(lx, ly, pl);
-    if (row >= 0) {
-        ui->pl_hover = row;
-        return UI_ACTION_PL_SELECT;
-    }
-
-    return UI_ACTION_NONE;
 }
 
 ui_action_t ui_on_mouse_motion(ui_t *ui, const SDL_MouseMotionEvent *e,
@@ -826,6 +1214,24 @@ ui_action_t ui_on_mouse_motion(ui_t *ui, const SDL_MouseMotionEvent *e,
 
     /* Update playlist hover — use pl_row_at so scroll offset is accounted for. */
     ui->pl_hover = pl_row_at(lx, ly, pl);
+
+    /* Update dropdown hover when a dropdown is open. */
+    motion_update_dd_hover(ui, lx, ly);
+
+    /* Drag dropdown scrollbar. */
+    if (ui->synth_dd_sb_dragging && held) {
+        bool is_inst  = ui->synth_inst_open;
+        i32  item_cnt = is_inst ? SYNTH_INSTRUMENTS : SYNTH_NOTES;
+        i32  max_scrl = item_cnt - DD_ROWS_VISIBLE;
+        i32  dd_y     = is_inst ? DD_INST_Y : DD_NOTE_Y;
+        f32  t        = (ly - (f32)dd_y) / (f32)DD_H;
+        if (t < 0.0f) { t = 0.0f; }
+        if (t > 1.0f) { t = 1.0f; }
+        ui->synth_dd_scroll = (i32)(t * (f32)max_scrl + 0.5f);
+        if (ui->synth_dd_scroll < 0)        { ui->synth_dd_scroll = 0; }
+        if (ui->synth_dd_scroll > max_scrl) { ui->synth_dd_scroll = max_scrl; }
+        return UI_ACTION_NONE;
+    }
 
     /* Drag scrollbar. */
     if (ui->sb_dragging && held && pl->count > 0) {
@@ -858,8 +1264,10 @@ ui_action_t ui_on_mouse_up(ui_t *ui, const SDL_MouseButtonEvent *e)
 
     if (e->button != SDL_BUTTON_LEFT) { return UI_ACTION_NONE; }
 
-    /* Synth hold-to-play: any left-button release stops the note. */
-    if (ui->synth_playing) { return UI_ACTION_SYNTH_PLAY_STOP; }
+    if (ui->synth_dd_sb_dragging) {
+        ui->synth_dd_sb_dragging = false;
+        return UI_ACTION_NONE;
+    }
 
     if (ui->sb_dragging) {
         ui->sb_dragging = false;
@@ -889,6 +1297,7 @@ ui_action_t ui_on_mouse_up(ui_t *ui, const SDL_MouseButtonEvent *e)
 ui_action_t ui_on_key(const SDL_KeyboardEvent *e)
 {
     assert(e != NULL);
+    assert(e->type == SDL_EVENT_KEY_DOWN);
 
     switch (e->scancode) {
     case SDL_SCANCODE_SPACE: return UI_ACTION_PLAY_PAUSE;
@@ -920,8 +1329,16 @@ ui_action_t ui_on_scroll(ui_t *ui, f32 lx, f32 ly, f32 dy,
         return UI_ACTION_SEEK;
     }
 
-    /* Synth panel: scroll over inst/note rows changes selection. */
+    /* Synth panel: scroll within an open dropdown, or over rows to change selection. */
     if (mode == APP_MODE_SYNTH) {
+        if (ui->synth_inst_open || ui->synth_note_open) {
+            i32 item_count = ui->synth_inst_open ? SYNTH_INSTRUMENTS : SYNTH_NOTES;
+            i32 max_scroll = item_count - DD_ROWS_VISIBLE;
+            ui->synth_dd_scroll -= (i32)dy;
+            if (ui->synth_dd_scroll < 0)           { ui->synth_dd_scroll = 0; }
+            if (ui->synth_dd_scroll > max_scroll)  { ui->synth_dd_scroll = max_scroll; }
+            return UI_ACTION_NONE;
+        }
         if (in_synth_inst_row(lx, ly)) {
             return (dy > 0.0f) ? UI_ACTION_SYNTH_INST_UP : UI_ACTION_SYNTH_INST_DOWN;
         }

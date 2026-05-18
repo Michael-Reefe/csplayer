@@ -13,6 +13,7 @@
 #include <SDL3/SDL.h>
 
 #include "harness.h"
+#include "types.h"
 
 /* ── Global state (declared in harness.h) ───────────────────────────────── */
 
@@ -33,6 +34,7 @@ void run_playlist_tests(void);
 void run_audio_tests(void);
 void run_synth_tests(void);
 void run_ui_tests(void);
+void run_metadata_tests(void);
 
 /* ── Test WAV generation ─────────────────────────────────────────────────── */
 
@@ -42,16 +44,16 @@ void run_ui_tests(void);
  */
 static bool create_test_wav(const char *path)
 {
-    static const unsigned int  sample_rate = 44100;
-    static const unsigned int  num_samples = 4410;   /* 100 ms */
-    static const unsigned int  data_size   = 4410 * 2;
-    static const unsigned int  file_size   = 36 + 4410 * 2;
-    static const unsigned short channels   = 1;
-    static const unsigned short bits       = 16;
-    static const unsigned short audio_fmt  = 1;  /* PCM */
-    static const unsigned int   byte_rate  = 44100 * 2;
-    static const unsigned short blk_align  = 2;
-    static const unsigned int   fmt_sz     = 16;
+    static const u32 sample_rate = 44100;
+    static const u32 num_samples = 4410;   /* 100 ms */
+    static const u32 data_size   = 4410 * 2;
+    static const u32 file_size   = 36 + 4410 * 2;
+    static const u16 channels    = 1;
+    static const u16 bits        = 16;
+    static const u16 audio_fmt   = 1;  /* PCM */
+    static const u32 byte_rate   = 44100 * 2;
+    static const u16 blk_align   = 2;
+    static const u32 fmt_sz      = 16;
 
     FILE *f = fopen(path, "wb");
     if (!f) return false;
@@ -71,7 +73,7 @@ static bool create_test_wav(const char *path)
     fwrite(&data_size,  4, 1, f);
 
     /* 100 ms of silence — 8820 bytes of zeros. */
-    static const unsigned char silence[8820] = {0};
+    static const u8 silence[8820] = {0};
     fwrite(silence, 1, num_samples * 2, f);
 
     return fclose(f) == 0;
@@ -122,6 +124,9 @@ int main(void)
 
     printf("\n-- ui (integration) --\n");
     run_ui_tests();
+
+    printf("\n-- metadata --\n");
+    run_metadata_tests();
 
     f64 total_ms = 1000.0 * (f64)(clock() - t_start) / (f64)CLOCKS_PER_SEC;
     printf("\n");

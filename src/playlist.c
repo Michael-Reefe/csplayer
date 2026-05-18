@@ -12,6 +12,7 @@
  */
 
 #include "playlist.h"
+#include "metadata.h"
 
 #include <SDL3/SDL.h>
 #include <string.h>
@@ -39,7 +40,7 @@ static void path_to_title(const char *path, char *dst)
     if (slash  != NULL && slash  > base) { base = slash  + 1; }
     if (bslash != NULL && bslash > base) { base = bslash + 1; }
 
-    SDL_strlcpy(dst, base, (size_t)TITLE_MAX_LEN);
+    (void)SDL_strlcpy(dst, base, (size_t)TITLE_MAX_LEN);
 
     /* Strip the extension (everything from the last dot). */
     char *dot = SDL_strrchr(dst, '.');
@@ -68,11 +69,45 @@ static bool is_duplicate(const playlist_t *pl, const char *path)
     return false;
 }
 
+/* Parse entries from an already-open file (positioned after the first line).
+ * Returns the number of entries loaded. */
+static i32 playlist_parse_entries(FILE *f, playlist_t *pl)
+{
+    assert(f  != NULL);
+    assert(pl != NULL);
+
+    char line[PATH_MAX_LEN];
+    i32 loaded = 0;
+    while (loaded < PLAYLIST_MAX && fgets(line, (i32)sizeof(line), f) != NULL) {
+        i32 len = (i32)SDL_strlen(line);
+        assert(len >= 0);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+            line[--len] = '\0';
+        }
+        if (len == 0) { continue; }
+        f64   dur = 0.0;
+        char *tab = SDL_strchr(line, '\t');
+        if (tab != NULL) {
+            *tab = '\0';
+            dur  = SDL_strtod(tab + 1, NULL);
+        }
+        SDL_strlcpy(pl->entries[loaded].path,  line, (size_t)PATH_MAX_LEN);
+        path_to_title(line, pl->entries[loaded].title);
+        pl->entries[loaded].artist[0] = '\0';
+        (void)metadata_read_artist(line, pl->entries[loaded].artist,
+                                   (i32)sizeof(pl->entries[loaded].artist));
+        pl->entries[loaded].duration_sec = dur;
+        loaded++;
+    }
+    return loaded;
+}
+
 /* ── Public interface ────────────────────────────────────────────────────── */
 
 bool playlist_init(playlist_t *pl)
 {
     assert(pl != NULL);
+    assert(PLAYLIST_MAX > 0);
 
     SDL_memset(pl, 0, sizeof(*pl));
     pl->current = -1;
@@ -92,6 +127,7 @@ bool playlist_load(playlist_t *pl)
 {
     assert(pl != NULL);
     assert(pl->pref_path[0] != '\0');
+    assert(pl->count == 0);
 
     char filepath[PATH_MAX_LEN * 2];
     if (SDL_snprintf(filepath, sizeof(filepath), "%s%s",
@@ -99,56 +135,26 @@ bool playlist_load(playlist_t *pl)
         return false;
     }
 
+    /* Use SDL_IOStream only to probe for file existence/emptiness; then switch
+     * to stdio fgets which SDL_IOStream lacks. */
     SDL_IOStream *io = SDL_IOFromFile(filepath, "r");
-    if (io == NULL) {
-        /* Missing file is not an error; the playlist just starts empty. */
-        return true;
-    }
-
-    /* Read current index from the first line. */
-    char line[PATH_MAX_LEN];
-    if (SDL_ReadIO(io, line, 1) == 0) {
-        SDL_CloseIO(io);
-        return true;
-    }
-
-    /* Re-open for line-by-line reading via stdio (SDL_IOStream lacks fgets). */
+    if (io == NULL) { return true; }   /* missing file = empty playlist, not an error */
+    char probe;
+    bool empty = (SDL_ReadIO(io, &probe, 1) == 0);
     SDL_CloseIO(io);
+    if (empty) { return true; }
 
     FILE *f = fopen(filepath, "r");
-    if (f == NULL) {
-        return true;
-    }
+    if (f == NULL) { return true; }
 
-    i32 saved_current = -1;
+    i32  saved_current = -1;
+    char line[PATH_MAX_LEN];
     if (fgets(line, (i32)sizeof(line), f) != NULL) {
         saved_current = (i32)SDL_strtol(line, NULL, 10);
     }
 
-    i32 loaded = 0;
-    while (loaded < PLAYLIST_MAX && fgets(line, (i32)sizeof(line), f) != NULL) {
-        /* Strip trailing newline / carriage return. */
-        i32 len = (i32)SDL_strlen(line);
-        assert(len >= 0);
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
-            line[--len] = '\0';
-        }
-        if (len == 0) {
-            continue;
-        }
-        /* Split on the first TAB to read the optional saved duration. */
-        f64   dur = 0.0;
-        char *tab = SDL_strchr(line, '\t');
-        if (tab != NULL) {
-            *tab = '\0';
-            dur  = SDL_strtod(tab + 1, NULL);
-        }
-        SDL_strlcpy(pl->entries[loaded].path,  line, (size_t)PATH_MAX_LEN);
-        path_to_title(line, pl->entries[loaded].title);
-        pl->entries[loaded].duration_sec = dur;
-        loaded++;
-    }
-    fclose(f);
+    i32 loaded = playlist_parse_entries(f, pl);
+    (void)fclose(f);
 
     pl->count   = loaded;
     pl->current = (saved_current >= 0 && saved_current < loaded)
@@ -174,15 +180,16 @@ bool playlist_save(const playlist_t *pl)
         return false;
     }
 
-    fprintf(f, "%d\n", pl->current);
+    (void)fprintf(f, "%d\n", pl->current);
 
     i32 limit = pl->count;
     assert(limit >= 0 && limit <= PLAYLIST_MAX);
 
     for (i32 i = 0; i < limit; i++) {
-        fprintf(f, "%s\t%.3f\n", pl->entries[i].path, pl->entries[i].duration_sec);
+        (void)fprintf(f, "%s\t%.3f\n",
+                      pl->entries[i].path, pl->entries[i].duration_sec);
     }
-    fclose(f);
+    (void)fclose(f);
     return true;
 }
 
@@ -202,6 +209,9 @@ i32 playlist_add_paths(playlist_t *pl, const char *const *filelist)
         }
         SDL_strlcpy(pl->entries[pl->count].path,  filelist[i], (size_t)PATH_MAX_LEN);
         path_to_title(filelist[i], pl->entries[pl->count].title);
+        pl->entries[pl->count].artist[0] = '\0';
+        (void)metadata_read_artist(filelist[i], pl->entries[pl->count].artist,
+                                   (i32)sizeof(pl->entries[pl->count].artist));
         pl->entries[pl->count].duration_sec = 0.0;
         pl->count++;
         added++;
@@ -216,6 +226,7 @@ i32 playlist_add_paths(playlist_t *pl, const char *const *filelist)
 i32 playlist_next(playlist_t *pl)
 {
     assert(pl != NULL);
+    assert(pl->count >= 0 && pl->count <= PLAYLIST_MAX);
 
     if (pl->count <= 0)                  { return -1; }
     if (pl->current >= pl->count - 1)    { return -1; }
@@ -226,6 +237,7 @@ i32 playlist_next(playlist_t *pl)
 i32 playlist_prev(playlist_t *pl)
 {
     assert(pl != NULL);
+    assert(pl->count >= 0 && pl->count <= PLAYLIST_MAX);
 
     if (pl->count <= 0)   { return -1; }
     if (pl->current <= 0) { return -1; }
@@ -272,6 +284,7 @@ i32 playlist_set_current(playlist_t *pl, i32 idx)
 {
     assert(pl  != NULL);
     assert(idx >= 0);
+    assert(pl->count >= 0 && pl->count <= PLAYLIST_MAX);
 
     if (pl->count <= 0) {
         return -1;
@@ -286,6 +299,7 @@ i32 playlist_set_current(playlist_t *pl, i32 idx)
 const char *playlist_current_path(const playlist_t *pl)
 {
     assert(pl != NULL);
+    assert(pl->count >= 0 && pl->count <= PLAYLIST_MAX);
 
     if (pl->current < 0 || pl->current >= pl->count) {
         return NULL;
