@@ -35,7 +35,7 @@ typedef  double complex c64;
 
 /* ── Application metadata ────────────────────────────────────────────────── */
 #define CSPLAYER_APP_NAME    "csplayer"
-#define CSPLAYER_APP_VERSION "0.2.0"
+#define CSPLAYER_APP_VERSION "0.3.0"
 #define CSPLAYER_APP_ID      "com.csplayer.csplayer"
 #define CSPLAYER_ORG         "csplayer"
 
@@ -45,7 +45,7 @@ typedef  double complex c64;
 #define LOG_W          512
 #define LOG_H          288
 #define PHYS_W         1024
-#define PHYS_H         576
+#define PHYS_H         592   /* = LOG_H * DISPLAY_SCALE */
 /* Integer scale factor from logical to physical pixels (= PHYS_W / LOG_W = 2).
  * Fonts are opened at ptsize × DISPLAY_SCALE and rendered at 1/DISPLAY_SCALE
  * logical size so FreeType rasterises at the physical pixel resolution. */
@@ -79,8 +79,9 @@ typedef  double complex c64;
 #define SPEC_W  456
 #define SPEC_H  152
 
-/* Playlist panel — 14 px below the spectrum (room for frequency tick labels) */
-#define PL_Y    (SPEC_Y + SPEC_H + 14)   /* = 194 */
+/* Playlist panel — 22 px below spectrum:
+ * 4 px gap + 8 px tick labels + 2 px gap + 8 px X-axis title = 22 px */
+#define PL_Y    (SPEC_Y + SPEC_H + 22)   /* = 202 */
 #define PL_H    64
 #define PL_ROW  16    /* height of each playlist row in logical pixels */
 
@@ -105,6 +106,27 @@ typedef enum {
     APP_MODE_PLAYER = 0,
     APP_MODE_SYNTH  = 1,
 } app_mode_t;
+
+/* ── Graph display mode ──────────────────────────────────────────────────── */
+/* Orthogonal to APP_MODE_PLAYER/SYNTH — persists across mode switches. */
+typedef enum {
+    GRAPH_MODE_FREQ  = 0,  /* log-freq FFT plot (default)              */
+    GRAPH_MODE_TIME,       /* time-domain waveform (green)             */
+    GRAPH_MODE_BOTH,       /* horizontal split: freq top, time bottom  */
+    GRAPH_MODE_COUNT,      /* sentinel — do not use as a runtime value */
+} graph_mode_t;
+
+/* Time-domain waveform window */
+#define WAVE_WINDOW_S       0.020f  /* 20 ms — ~2 cycles at 100 Hz, ~8.8 at 440 Hz */
+#define WAVE_TRIGGER_RANGE  512     /* samples scanned for zero-crossing fallback    */
+#define XCORR_SEARCH        2048    /* sample range searched for cross-correlation   */
+#define XCORR_STRIDE        4       /* pixel stride used in cross-correlation        */
+#define WAVE_SMOOTH_COEFF   0.95f   /* per-frame exponential smoothing for time pts */
+
+/* Graph mode toggle buttons (top-right interior of spectrum panel) */
+#define GRAPH_BTN_W    38   /* logical px per button (fits 4-char label + padding) */
+#define GRAPH_BTN_H    10   /* logical px per button height                        */
+#define GRAPH_BTN_GAP   2   /* gap between adjacent buttons                        */
 
 /* ── Synthesizer ─────────────────────────────────────────────────────────── */
 #define SYNTH_SAMPLE_RATE  44100
@@ -134,5 +156,6 @@ typedef enum {
 #define COL_VOL_FG    100, 200, 120, 255   /* volume-bar filled portion */
 #define COL_NOW       100, 200, 120, 255   /* "now playing" accent      */
 #define COL_HEADER     20,  20,  50, 255   /* header bar background     */
+#define COL_WAVE      100, 200, 120, 255   /* time-domain waveform line */
 
 #endif /* CSPLAYER_TYPES_H */

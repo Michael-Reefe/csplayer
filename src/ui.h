@@ -47,6 +47,8 @@ typedef enum {
     UI_ACTION_SYNTH_NOTE_DOWN,   /* MIDI note -1 (clamp at 0)                 */
     UI_ACTION_SYNTH_INST_SET,    /* dropdown item selected — synth_dd_select   */
     UI_ACTION_SYNTH_NOTE_SET,    /* dropdown item selected — synth_dd_select   */
+    /* Graph display mode */
+    UI_ACTION_GRAPH_MODE,        /* graph_mode already updated by ui.c         */
 } ui_action_t;
 
 /* ── Module state ────────────────────────────────────────────────────────── */
@@ -87,6 +89,9 @@ typedef struct {
     f32          hdr_artist_w;                /* logical px width of artist part  */
     char         hdr_cache_title[TITLE_MAX_LEN];       /* title at last build     */
     char         hdr_cache_artist[TITLE_MAX_LEN + 4];  /* artist at last build    */
+    /* Graph display mode — orthogonal to APP_MODE_PLAYER/SYNTH, persists across
+     * mode switches.  Initialised to GRAPH_MODE_FREQ (= 0) by SDL_memset. */
+    graph_mode_t graph_mode;
 } ui_t;
 
 /* ── Public interface ────────────────────────────────────────────────────── */

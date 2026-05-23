@@ -231,7 +231,7 @@ elseif(APPLE)
 endif()
 
 set(CPACK_PACKAGE_NAME                "csplayer")
-set(CPACK_PACKAGE_VERSION             "0.2.0")
+set(CPACK_PACKAGE_VERSION             "0.3.0")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Lightweight audio player with real-time spectrum analyser")
 set(CPACK_STRIP_FILES                 TRUE)
 if(WIN32)

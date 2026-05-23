@@ -303,18 +303,34 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 
 /* ── SDL3 callback: SDL_AppIterate ───────────────────────────────────────── */
 
+static void update_spectrum(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->audio.sample_rate >= 0.0f);
+
+    audio_snapshot_ring(&app->audio, app->pcm_snapshot);
+    fft_process(&app->fft, app->pcm_snapshot);
+    spectrum_update(&app->spectrum, &app->fft);
+
+    f32 sr = (app->audio.sample_rate > 0.0f)
+                 ? app->audio.sample_rate : (f32)SYNTH_SAMPLE_RATE;
+    i32 th = (app->ui.graph_mode == GRAPH_MODE_BOTH) ? SPEC_H / 2 : SPEC_H;
+    i32 ty = (app->ui.graph_mode == GRAPH_MODE_BOTH) ? SPEC_Y + th : SPEC_Y;
+    spectrum_update_time(&app->spectrum, app->pcm_snapshot, RING_SIZE, sr, ty, th);
+
+    if (app->ui.graph_mode == GRAPH_MODE_BOTH) {
+        spectrum_map_freq_pts(&app->spectrum, SPEC_Y, SPEC_H / 2);
+    }
+}
+
 SDL_AppResult SDL_AppIterate(void *appstate)
 {
     app_t *app = (app_t *)appstate;
     assert(app != NULL);
     assert(app->renderer != NULL);
 
-    /* Capture latest PCM snapshot, run FFT, update display data. */
-    audio_snapshot_ring(&app->audio, app->pcm_snapshot);
-    fft_process  (&app->fft,      app->pcm_snapshot);
-    spectrum_update(&app->spectrum, &app->fft);
+    update_spectrum(app);
 
-    /* Render the frame. */
     ui_draw(app->renderer, &app->audio, &app->spectrum,
             &app->playlist, &app->ui, app->mode, &app->synth);
 
@@ -478,6 +494,9 @@ static void dispatch_action(app_t *app, ui_action_t action)
         break;
     case UI_ACTION_SYNTH_NOTE_SET:
         dispatch_synth_note(app, app->ui.synth_dd_select);
+        break;
+    case UI_ACTION_GRAPH_MODE:
+        /* graph_mode already updated by ui.c; no further state change needed */
         break;
     default:
         break;
