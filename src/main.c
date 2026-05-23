@@ -240,6 +240,7 @@ static SDL_AppResult app_create_window(app_t *app)
     }
     (void)SDL_SetRenderLogicalPresentation(app->renderer, LOG_W, LOG_H,
                                            SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+    (void)SDL_SetRenderVSync(app->renderer, 1);
     (void)SDL_SetWindowAspectRatio(app->window, 16.0f / 9.0f, 16.0f / 9.0f);
     (void)SDL_SetWindowMinimumSize(app->window, LOG_W, LOG_H);
     return SDL_APP_CONTINUE;

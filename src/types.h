@@ -35,7 +35,7 @@ typedef  double complex c64;
 
 /* ── Application metadata ────────────────────────────────────────────────── */
 #define CSPLAYER_APP_NAME    "csplayer"
-#define CSPLAYER_APP_VERSION "0.3.0"
+#define CSPLAYER_APP_VERSION "0.3.1"
 #define CSPLAYER_APP_ID      "com.csplayer.csplayer"
 #define CSPLAYER_ORG         "csplayer"
 
@@ -56,7 +56,7 @@ typedef  double complex c64;
 #define FFT_SIZE      8192
 #define FFT_BINS      (FFT_SIZE / 2 + 1)   /* r2c output bins = 4097 */
 #define RING_SIZE     FFT_SIZE              /* PCM ring buffer (mono samples) */
-#define SMOOTH_COEFF  0.80f                 /* exponential smoothing per frame */
+#define SMOOTH_COEFF  0.20f                 /* exponential smoothing per frame */
 
 /* ── Spectrum display ────────────────────────────────────────────────────── */
 #define FREQ_MIN   20.0f      /* Hz — lowest displayed frequency  */
@@ -121,7 +121,7 @@ typedef enum {
 #define WAVE_TRIGGER_RANGE  512     /* samples scanned for zero-crossing fallback    */
 #define XCORR_SEARCH        2048    /* sample range searched for cross-correlation   */
 #define XCORR_STRIDE        4       /* pixel stride used in cross-correlation        */
-#define WAVE_SMOOTH_COEFF   0.95f   /* per-frame exponential smoothing for time pts */
+#define WAVE_SMOOTH_COEFF   0.65f   /* per-frame exponential smoothing for time pts */
 
 /* Graph mode toggle buttons (top-right interior of spectrum panel) */
 #define GRAPH_BTN_W    38   /* logical px per button (fits 4-char label + padding) */
