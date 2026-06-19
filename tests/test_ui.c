@@ -126,17 +126,19 @@ static playlist_t make_pl(i32 count, i32 current)
 static void test_ui_key_space(void)
 {
     TEST_BEGIN("ui_key_space");
+    ui_t ui; SDL_memset(&ui, 0, sizeof(ui));
     SDL_KeyboardEvent e = make_key(SDL_SCANCODE_SPACE);
-    CHECK(ui_on_key(&e) == UI_ACTION_PLAY_PAUSE);
-    CHECK(e.scancode == SDL_SCANCODE_SPACE);   /* ui_on_key must not modify the event */
+    CHECK(ui_on_key(&ui, &e, APP_MODE_PLAYER) == UI_ACTION_PLAY_PAUSE);
+    CHECK(e.scancode == SDL_SCANCODE_SPACE);
     TEST_END();
 }
 
 static void test_ui_key_left(void)
 {
     TEST_BEGIN("ui_key_left");
+    ui_t ui; SDL_memset(&ui, 0, sizeof(ui));
     SDL_KeyboardEvent e = make_key(SDL_SCANCODE_LEFT);
-    CHECK(ui_on_key(&e) == UI_ACTION_REWIND);
+    CHECK(ui_on_key(&ui, &e, APP_MODE_PLAYER) == UI_ACTION_REWIND);
     CHECK(e.scancode == SDL_SCANCODE_LEFT);
     TEST_END();
 }
@@ -144,8 +146,9 @@ static void test_ui_key_left(void)
 static void test_ui_key_right(void)
 {
     TEST_BEGIN("ui_key_right");
+    ui_t ui; SDL_memset(&ui, 0, sizeof(ui));
     SDL_KeyboardEvent e = make_key(SDL_SCANCODE_RIGHT);
-    CHECK(ui_on_key(&e) == UI_ACTION_NEXT);
+    CHECK(ui_on_key(&ui, &e, APP_MODE_PLAYER) == UI_ACTION_NEXT);
     CHECK(e.scancode == SDL_SCANCODE_RIGHT);
     TEST_END();
 }
@@ -153,9 +156,63 @@ static void test_ui_key_right(void)
 static void test_ui_key_other(void)
 {
     TEST_BEGIN("ui_key_other");
+    ui_t ui; SDL_memset(&ui, 0, sizeof(ui));
     SDL_KeyboardEvent e = make_key(SDL_SCANCODE_ESCAPE);
-    CHECK(ui_on_key(&e) == UI_ACTION_NONE);
+    CHECK(ui_on_key(&ui, &e, APP_MODE_PLAYER) == UI_ACTION_NONE);
     CHECK(e.scancode == SDL_SCANCODE_ESCAPE);
+    TEST_END();
+}
+
+static void test_ui_key_graph_shortcuts(void)
+{
+    TEST_BEGIN("ui_key_graph_shortcuts");
+    ui_t ui; SDL_memset(&ui, 0, sizeof(ui));
+    SDL_KeyboardEvent e;
+
+    e = make_key(SDL_SCANCODE_S);
+    CHECK(ui_on_key(&ui, &e, APP_MODE_PLAYER) == UI_ACTION_GRAPH_MODE);
+    CHECK(ui.graph_mode == GRAPH_MODE_FREQ);
+
+    e = make_key(SDL_SCANCODE_W);
+    CHECK(ui_on_key(&ui, &e, APP_MODE_PLAYER) == UI_ACTION_GRAPH_MODE);
+    CHECK(ui.graph_mode == GRAPH_MODE_TIME);
+
+    e = make_key(SDL_SCANCODE_B);
+    CHECK(ui_on_key(&ui, &e, APP_MODE_PLAYER) == UI_ACTION_GRAPH_MODE);
+    CHECK(ui.graph_mode == GRAPH_MODE_BOTH);
+    TEST_END();
+}
+
+static void test_ui_key_decompose_toggle(void)
+{
+    TEST_BEGIN("ui_key_decompose_toggle");
+    ui_t ui; SDL_memset(&ui, 0, sizeof(ui));
+    SDL_KeyboardEvent e = make_key(SDL_SCANCODE_D);
+    CHECK(ui_on_key(&ui, &e, APP_MODE_PLAYER) == UI_ACTION_WAVE_DECOMPOSE);
+    CHECK(ui.wave_decompose == true);
+    CHECK(ui_on_key(&ui, &e, APP_MODE_PLAYER) == UI_ACTION_WAVE_DECOMPOSE);
+    CHECK(ui.wave_decompose == false);
+    TEST_END();
+}
+
+static void test_ui_key_mode_shortcuts(void)
+{
+    TEST_BEGIN("ui_key_mode_shortcuts");
+    ui_t ui; SDL_memset(&ui, 0, sizeof(ui));
+    SDL_KeyboardEvent ep = make_key(SDL_SCANCODE_P);
+    SDL_KeyboardEvent es = make_key(SDL_SCANCODE_S);
+    ep.mod = SDL_KMOD_LSHIFT;
+    es.mod = SDL_KMOD_LSHIFT;
+
+    /* Shift+P while already in PLAYER → no action */
+    CHECK(ui_on_key(&ui, &ep, APP_MODE_PLAYER) == UI_ACTION_NONE);
+    /* Shift+P while in SYNTH → toggle */
+    CHECK(ui_on_key(&ui, &ep, APP_MODE_SYNTH) == UI_ACTION_MODE_TOGGLE);
+
+    /* Shift+S while already in SYNTH → no action */
+    CHECK(ui_on_key(&ui, &es, APP_MODE_SYNTH) == UI_ACTION_NONE);
+    /* Shift+S while in PLAYER → toggle */
+    CHECK(ui_on_key(&ui, &es, APP_MODE_PLAYER) == UI_ACTION_MODE_TOGGLE);
     TEST_END();
 }
 
@@ -289,8 +346,8 @@ static void test_ui_mouse_down_scrollbar(void)
     audio_t a = dummy_audio();
     /* Need count > 0 for sb_pos_to_scroll to be called (count branch). */
     playlist_t pl = make_pl(8, 0);
-    /* x=508 is in [PL_SB_X=507, 512), y=210 is in [PL_Y=202, 266). */
-    SDL_MouseButtonEvent e = make_btn(508.0f, 210.0f, SDL_BUTTON_LEFT);
+    /* x=637 is in [PL_SB_X=635, 640), y=260 is in [PL_Y=242, 338). */
+    SDL_MouseButtonEvent e = make_btn(637.0f, 260.0f, SDL_BUTTON_LEFT);
     ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
     CHECK(act == UI_ACTION_NONE);
     CHECK(ui.sb_dragging);
@@ -304,7 +361,7 @@ static void test_ui_mouse_down_scrollbar_nospace(void)
     audio_t a = dummy_audio();
     /* count=3 <= visible=4 → max_scroll<=0 → sb_pos_to_scroll returns 0 */
     playlist_t pl = make_pl(3, 0);
-    SDL_MouseButtonEvent e = make_btn(508.0f, 210.0f, SDL_BUTTON_LEFT);
+    SDL_MouseButtonEvent e = make_btn(637.0f, 260.0f, SDL_BUTTON_LEFT);
     ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
     CHECK(pl.scroll == 0);
     CHECK(ui.sb_dragging);
@@ -317,8 +374,8 @@ static void test_ui_mouse_down_pl_delete(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(2, 0);
-    /* x=494 is in delete column [493, 505); y maps to row 0. */
-    SDL_MouseButtonEvent e = make_btn(494.0f, (f32)(PL_Y + 4), SDL_BUTTON_LEFT);
+    /* x=625 is in delete column [PL_DEL_X=621, 633); y maps to row 0. */
+    SDL_MouseButtonEvent e = make_btn(625.0f, (f32)(PL_Y + 4), SDL_BUTTON_LEFT);
     ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
     CHECK(act == UI_ACTION_PL_REMOVE);
     CHECK(ui.pl_hover == 0);
@@ -427,10 +484,10 @@ static void test_ui_mouse_motion_sb_below(void)
     /* sb_dragging + held + ly > PL_Y+PL_H → t clamped to 1 → max_scroll */
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.sb_dragging = true;
-    playlist_t pl = make_pl(8, 0);
-    SDL_MouseMotionEvent e = make_motion(508.0f, 280.0f);  /* > PL_Y+PL_H=258 */
+    playlist_t pl = make_pl(10, 0);
+    SDL_MouseMotionEvent e = make_motion(508.0f, 345.0f);  /* > PL_Y+PL_H=338 */
     ui_on_mouse_motion(&ui, &e, true, &pl);
-    /* max_scroll = 8 - 4 = 4; scroll clamped to 4 */
+    /* max_scroll = 10 - 6 = 4; scroll clamped to 4 */
     CHECK(pl.scroll == 4);
     CHECK(ui.sb_dragging);
     TEST_END();
@@ -488,8 +545,8 @@ static void test_ui_mouse_motion_seek_drag_hi(void)
     ui.scrubbing = true;
     ui.scrub_pos = 0.5f;
     playlist_t pl = make_pl(0, -1);
-    /* lx=600 > SEEK_X+SEEK_W=508 → scrub_pos > 1 → clamped to 1 */
-    SDL_MouseMotionEvent e = make_motion(600.0f, 268.0f);
+    /* lx=640 > SEEK_X+SEEK_W=636 → scrub_pos > 1 → clamped to 1 */
+    SDL_MouseMotionEvent e = make_motion(640.0f, 268.0f);
     ui_on_mouse_motion(&ui, &e, true, &pl);
     CHECK(ui.scrub_pos == 1.0f);
     CHECK(ui.scrubbing);
@@ -588,7 +645,7 @@ static void test_ui_mouse_up_seek_clamp_hi(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.scrubbing = true;
     /* Release right of seek bar: scrub_pos clamps to 1. */
-    SDL_MouseButtonEvent e = make_btn(600.0f, 268.0f, SDL_BUTTON_LEFT);
+    SDL_MouseButtonEvent e = make_btn(640.0f, 268.0f, SDL_BUTTON_LEFT);
     ui_on_mouse_up(&ui, &e);
     CHECK(ui.scrub_pos == 1.0f);
     CHECK(!ui.scrubbing);
@@ -705,12 +762,12 @@ static void test_ui_scroll_playlist_clamp(void)
 {
     TEST_BEGIN("ui_scroll_playlist_clamp");
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    playlist_t pl = make_pl(8, 0);
+    playlist_t pl = make_pl(10, 0);
     pl.scroll = 0;
     /* dy=10 → scroll -= 10 = -10 → clamped to 0 */
     ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, 10.0f, 0.5f, &pl, APP_MODE_PLAYER);
     CHECK(pl.scroll == 0);
-    /* dy=-10 → scroll += 10 = 10 → clamped to max_scroll=4 */
+    /* dy=-10 → scroll += 10 = 10 → clamped to max_scroll=4 (10-6=4) */
     ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, -10.0f, 0.5f, &pl, APP_MODE_PLAYER);
     CHECK(pl.scroll == 4);
     TEST_END();
@@ -1163,9 +1220,9 @@ static void test_ui_synth_dd_sb_drag_start(void)
     ui.synth_dd_scroll = 0;
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
-    /* x=505 is in [LOG_W-4-DD_SB_W=503, LOG_W-4=508) — scrollbar strip.
-     * y=DD_INST_Y+8=218 is inside the dropdown rect. */
-    SDL_MouseButtonEvent e = make_btn(505.0f, (f32)(PL_Y + 16 + 8), SDL_BUTTON_LEFT);
+    /* x=633 is in [LOG_W-4-DD_SB_W=631, LOG_W-4=636) — scrollbar strip.
+     * y=DD_INST_Y+8 is inside the dropdown rect. */
+    SDL_MouseButtonEvent e = make_btn(633.0f, (f32)(PL_Y + 16 + 8), SDL_BUTTON_LEFT);
     CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_NONE);
     CHECK(ui.synth_dd_sb_dragging);
     CHECK(ui.synth_inst_open);   /* dropdown stays open during scroll drag */
@@ -1693,6 +1750,9 @@ void run_ui_tests(void)
     test_ui_key_left();
     test_ui_key_right();
     test_ui_key_other();
+    test_ui_key_graph_shortcuts();
+    test_ui_key_decompose_toggle();
+    test_ui_key_mode_shortcuts();
     test_ui_mouse_down_non_left();
     test_ui_mouse_down_rewind_btn();
     test_ui_mouse_down_play_btn();

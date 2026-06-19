@@ -47,6 +47,22 @@ typedef struct {
     i32  bin_lo[SPEC_W];    /* floor bin index  */
     i32  bin_hi[SPEC_W];    /* ceil  bin index  */
     f32  bin_frac[SPEC_W];  /* fractional part for linear interpolation */
+
+    /* ── Band-decomposed waveform (wave_decompose mode) ─────────────────── */
+    /* Screen-space points for each band sub-panel (BAND_W points each). */
+    SDL_FPoint bass_pts[BAND_W];
+    SDL_FPoint mid_pts[BAND_W];
+    SDL_FPoint high_pts[BAND_W];
+    /* Per-pixel exponential smoothing (parallel to smooth_time). */
+    f32  smooth_bass[BAND_W];
+    f32  smooth_mid[BAND_W];
+    f32  smooth_high[BAND_W];
+    /* Previous-frame filtered amplitudes for per-band xcorr trigger alignment. */
+    f32  prev_bass[BAND_W];
+    f32  prev_mid[BAND_W];
+    f32  prev_high[BAND_W];
+    /* IIR filter output scratch: reused for each of the 3 bands in sequence. */
+    f32  band_scratch[FFT_SIZE];
 } spectrum_t;
 
 /* ── Public interface ────────────────────────────────────────────────────── */
@@ -101,6 +117,26 @@ void spectrum_map_freq_pts(spectrum_t *s, i32 plot_y, i32 plot_h);
  *      for the final y coordinate to suppress per-frame phase jitter.
  */
 void spectrum_update_time(spectrum_t *s, const f32 *samples, i32 n,
+                           f32 sample_rate, i32 plot_y, i32 plot_h);
+
+/*
+ * Compute band-decomposed waveform points for bass, mids, and highs.
+ *
+ * Applies 2nd-order Butterworth IIR biquad filters (Direct Form II Transposed)
+ * directly to the raw PCM snapshot to isolate each frequency band:
+ *   - Bass:  lowpass  at DECOMP_BASS_HZ
+ *   - Mids:  highpass at DECOMP_BASS_HZ then lowpass at DECOMP_MIDS_HZ
+ *   - Highs: highpass at DECOMP_MIDS_HZ
+ * Each band is written to s->band_scratch[], then the same zero-crossing +
+ * xcorr trigger alignment used by spectrum_update_time is applied per-band
+ * (using prev_bass/mid/high).  BAND_W pixels are mapped into the band's
+ * horizontal sub-panel within [SPEC_X + offset, plot_y .. plot_y+plot_h].
+ *
+ * samples    — chronological PCM snapshot (oldest first), length n.
+ * sample_rate — must be > 0.
+ * plot_y / plot_h define the time-domain rect.
+ */
+void spectrum_update_bands(spectrum_t *s, const f32 *samples, i32 n,
                            f32 sample_rate, i32 plot_y, i32 plot_h);
 
 #endif /* CSPLAYER_SPECTRUM_H */

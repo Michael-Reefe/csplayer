@@ -370,6 +370,121 @@ static void test_time_xcorr_shi_lt_slo(void)
     TEST_END();
 }
 
+/* ── IIR biquad band filter tests (via spectrum_update_bands) ────────────── */
+
+static void test_biquad_lp_attenuates_highs(void)
+{
+    TEST_BEGIN("biquad_lp_attenuates_highs");
+    /* 8 kHz sine through LP bass band (cutoff 200 Hz) — output should be ~0. */
+    f32 sr   = 44100.0f;
+    f32 freq = 8000.0f;
+    for (i32 i = 0; i < RING_SIZE; i++) {
+        g_samples[i] = sinf(2.0f * 3.14159265f * freq * (f32)i / sr);
+    }
+    SDL_memset(g_spec.smooth_bass, 0, sizeof(g_spec.smooth_bass));
+    SDL_memset(g_spec.prev_bass,   0, sizeof(g_spec.prev_bass));
+    for (i32 c = 0; c < 30; c++) {
+        spectrum_update_bands(&g_spec, g_samples, RING_SIZE, sr, SPEC_Y, SPEC_H);
+    }
+    f32 center = (f32)SPEC_Y + (f32)SPEC_H * 0.5f;
+    for (i32 x = 0; x < BAND_W; x++) {
+        CHECK(fabsf(g_spec.bass_pts[x].y - center) < 2.0f);
+    }
+    CHECK(g_spec.bass_pts[0].x >= (f32)SPEC_X);
+    TEST_END();
+}
+
+static void test_biquad_lp_passes_bass(void)
+{
+    TEST_BEGIN("biquad_lp_passes_bass");
+    /* 40 Hz sine through LP bass band (cutoff 200 Hz) — output should be large. */
+    f32 sr   = 44100.0f;
+    f32 freq = 40.0f;
+    for (i32 i = 0; i < RING_SIZE; i++) {
+        g_samples[i] = sinf(2.0f * 3.14159265f * freq * (f32)i / sr);
+    }
+    SDL_memset(g_spec.smooth_bass, 0, sizeof(g_spec.smooth_bass));
+    SDL_memset(g_spec.prev_bass,   0, sizeof(g_spec.prev_bass));
+    for (i32 c = 0; c < 30; c++) {
+        spectrum_update_bands(&g_spec, g_samples, RING_SIZE, sr, SPEC_Y, SPEC_H);
+    }
+    f32 center = (f32)SPEC_Y + (f32)SPEC_H * 0.5f;
+    i32 non_zero = 0;
+    for (i32 x = 0; x < BAND_W; x++) {
+        if (fabsf(g_spec.bass_pts[x].y - center) > 2.0f) { non_zero++; }
+    }
+    CHECK(non_zero > BAND_W / 2);
+    CHECK(g_spec.bass_pts[0].x >= (f32)SPEC_X);
+    TEST_END();
+}
+
+static void test_biquad_hp_attenuates_bass(void)
+{
+    TEST_BEGIN("biquad_hp_attenuates_bass");
+    /* 40 Hz sine through HP highs band (cutoff 4 kHz) — output should be ~0. */
+    f32 sr   = 44100.0f;
+    f32 freq = 40.0f;
+    for (i32 i = 0; i < RING_SIZE; i++) {
+        g_samples[i] = sinf(2.0f * 3.14159265f * freq * (f32)i / sr);
+    }
+    SDL_memset(g_spec.smooth_high, 0, sizeof(g_spec.smooth_high));
+    SDL_memset(g_spec.prev_high,   0, sizeof(g_spec.prev_high));
+    for (i32 c = 0; c < 30; c++) {
+        spectrum_update_bands(&g_spec, g_samples, RING_SIZE, sr, SPEC_Y, SPEC_H);
+    }
+    f32 center = (f32)SPEC_Y + (f32)SPEC_H * 0.5f;
+    for (i32 x = 0; x < BAND_W; x++) {
+        CHECK(fabsf(g_spec.high_pts[x].y - center) < 2.0f);
+    }
+    CHECK(g_spec.high_pts[0].x >= (f32)(SPEC_X + 2 * BAND_W));
+    TEST_END();
+}
+
+static void test_bands_pts_bounds_iir(void)
+{
+    TEST_BEGIN("bands_pts_bounds_iir");
+    /* Multi-band signal → all band pts must stay within the plot rect. */
+    f32 sr = 44100.0f;
+    for (i32 i = 0; i < RING_SIZE; i++) {
+        g_samples[i] = 0.4f * sinf(2.0f * 3.14159265f *   73.0f * (f32)i / sr)
+                     + 0.4f * sinf(2.0f * 3.14159265f * 1200.0f * (f32)i / sr)
+                     + 0.4f * sinf(2.0f * 3.14159265f * 6000.0f * (f32)i / sr);
+    }
+    for (i32 c = 0; c < 5; c++) {
+        spectrum_update_bands(&g_spec, g_samples, RING_SIZE, sr, SPEC_Y, SPEC_H);
+    }
+    for (i32 x = 0; x < BAND_W; x++) {
+        CHECK(g_spec.bass_pts[x].y >= (f32)SPEC_Y);
+        CHECK(g_spec.bass_pts[x].y <= (f32)(SPEC_Y + SPEC_H));
+        CHECK(g_spec.mid_pts[x].y  >= (f32)SPEC_Y);
+        CHECK(g_spec.mid_pts[x].y  <= (f32)(SPEC_Y + SPEC_H));
+        CHECK(g_spec.high_pts[x].y >= (f32)SPEC_Y);
+        CHECK(g_spec.high_pts[x].y <= (f32)(SPEC_Y + SPEC_H));
+    }
+    TEST_END();
+}
+
+static void test_bands_silence_iir(void)
+{
+    TEST_BEGIN("bands_silence_iir");
+    /* Zero samples, zeroed smooth arrays → all band pts at centre line. */
+    SDL_memset(g_samples,          0, sizeof(g_samples));
+    SDL_memset(g_spec.smooth_bass, 0, sizeof(g_spec.smooth_bass));
+    SDL_memset(g_spec.smooth_mid,  0, sizeof(g_spec.smooth_mid));
+    SDL_memset(g_spec.smooth_high, 0, sizeof(g_spec.smooth_high));
+    SDL_memset(g_spec.prev_bass,   0, sizeof(g_spec.prev_bass));
+    SDL_memset(g_spec.prev_mid,    0, sizeof(g_spec.prev_mid));
+    SDL_memset(g_spec.prev_high,   0, sizeof(g_spec.prev_high));
+    spectrum_update_bands(&g_spec, g_samples, RING_SIZE, 44100.0f, SPEC_Y, SPEC_H);
+    f32 center = (f32)SPEC_Y + (f32)SPEC_H * 0.5f;
+    for (i32 x = 0; x < BAND_W; x++) {
+        CHECK(fabsf(g_spec.bass_pts[x].y - center) < 1.0f);
+        CHECK(fabsf(g_spec.mid_pts[x].y  - center) < 1.0f);
+        CHECK(fabsf(g_spec.high_pts[x].y - center) < 1.0f);
+    }
+    TEST_END();
+}
+
 /* ── Suite ───────────────────────────────────────────────────────────────── */
 
 void run_spectrum_tests(void)
@@ -403,6 +518,12 @@ void run_spectrum_tests(void)
     test_map_pts_full();
     test_map_pts_silence();
     test_time_xcorr_shi_lt_slo();
+
+    test_biquad_lp_attenuates_highs();
+    test_biquad_lp_passes_bass();
+    test_biquad_hp_attenuates_bass();
+    test_bands_pts_bounds_iir();
+    test_bands_silence_iir();
 
     fft_quit(&g_fft);
 }

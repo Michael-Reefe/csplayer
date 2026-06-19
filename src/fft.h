@@ -32,11 +32,11 @@ typedef struct {
 /* ── Module state ────────────────────────────────────────────────────────── */
 
 typedef struct {
-    rfft_plan_t plan;             /* embedded plan — no pointer, no malloc     */
-    f32         in[FFT_SIZE];     /* Hann-windowed PCM input                   */
-    c32         out[FFT_BINS];    /* r2c complex output, bins 0..N/2           */
-    f32         window[FFT_SIZE]; /* precomputed Hann coefficients             */
-    f32         mags[FFT_BINS];   /* linear magnitudes (0 dBFS → 1.0)         */
+    rfft_plan_t plan;                /* embedded plan — no pointer, no malloc     */
+    f32         in[FFT_SIZE];        /* Hann-windowed PCM input                   */
+    c32         out[FFT_BINS];       /* r2c complex output, bins 0..N/2           */
+    f32         window[FFT_SIZE];    /* precomputed Hann coefficients             */
+    f32         mags[FFT_BINS];      /* linear magnitudes (0 dBFS → 1.0)         */
 } fft_t;
 
 /* ── Public interface ────────────────────────────────────────────────────── */

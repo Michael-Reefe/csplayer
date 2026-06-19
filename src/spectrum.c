@@ -108,14 +108,17 @@ void spectrum_map_freq_pts(spectrum_t *s, i32 plot_y, i32 plot_h)
 }
 
 /* Search samples[slo..shi] for the start whose downsampled window best
- * correlates with prev_win[SPEC_W].  Returns fallback when prev_win has
- * near-zero energy (silence / first frame). */
+ * correlates with prev_win[panel_w].  Returns fallback when prev_win has
+ * near-zero energy (silence / first frame).
+ * panel_w is the number of display pixels (SPEC_W for the full panel,
+ * BAND_W for a band sub-panel). */
 static i32 xcorr_best_start(const f32 *samples, i32 n, i32 win,
-                             const f32 *prev_win, i32 fallback)
+                             const f32 *prev_win, i32 fallback, i32 panel_w)
 {
     assert(samples  != NULL);
     assert(prev_win != NULL);
     assert(win > 0 && win <= n);
+    assert(panel_w  > 0);
 
     i32 slo = n - XCORR_SEARCH;
     if (slo < 0)    { slo = 0; }
@@ -123,7 +126,7 @@ static i32 xcorr_best_start(const f32 *samples, i32 n, i32 win,
     if (shi < slo)  { return fallback; }
 
     f32 energy = 0.0f;
-    for (i32 x = 0; x < SPEC_W; x += XCORR_STRIDE) {
+    for (i32 x = 0; x < panel_w; x += XCORR_STRIDE) {
         energy += prev_win[x] * prev_win[x];
     }
     if (energy < 1e-6f) { return fallback; }
@@ -132,8 +135,8 @@ static i32 xcorr_best_start(const f32 *samples, i32 n, i32 win,
     i32 best_s = fallback;
     for (i32 c = slo; c <= shi; c++) {
         f32 corr = 0.0f;
-        for (i32 x = 0; x < SPEC_W; x += XCORR_STRIDE) {
-            i32 src = c + x * win / SPEC_W;
+        for (i32 x = 0; x < panel_w; x += XCORR_STRIDE) {
+            i32 src = c + x * win / panel_w;
             if (src >= n) { src = n - 1; }
             f32 a = samples[src];
             if (a >  1.0f) { a =  1.0f; }
@@ -174,7 +177,7 @@ void spectrum_update_time(spectrum_t *s, const f32 *samples, i32 n,
     if (zc + win > n) { zc = n - win; }
 
     /* Cross-correlation alignment — overrides zero-crossing when prior data exists. */
-    i32 start = xcorr_best_start(samples, n, win, s->prev_window, zc);
+    i32 start = xcorr_best_start(samples, n, win, s->prev_window, zc, SPEC_W);
     if (start < 0)       { start = 0; }
     if (start + win > n) { start = n - win; }
 
@@ -196,4 +199,152 @@ void spectrum_update_time(spectrum_t *s, const f32 *samples, i32 n,
         s->time_pts[x].x = (f32)(SPEC_X + x);
         s->time_pts[x].y = y;
     }
+}
+
+/* ── 2nd-order Butterworth biquad filters (Direct Form II Transposed) ──────── */
+
+typedef struct { f32 b0, b1, b2, a1, a2; } biquad_t;
+
+static biquad_t biquad_lp(f32 fc, f32 fs)
+{
+    assert(fc > 0.0f && fc < fs * 0.5f);
+    assert(fs > 0.0f);
+    /* Q = 1/√2 for Butterworth; K/Q = K * √2 */
+    static const f32 SQRT2 = 1.41421356237309504880f;
+    f32 K    = tanf(3.14159265358979323846f * fc / fs);
+    f32 K2   = K * K;
+    f32 norm = 1.0f / (1.0f + K * SQRT2 + K2);
+    biquad_t c;
+    c.b0 = K2 * norm;
+    c.b1 = 2.0f * c.b0;
+    c.b2 = c.b0;
+    c.a1 = 2.0f * (K2 - 1.0f) * norm;
+    c.a2 = (1.0f - K * SQRT2 + K2) * norm;
+    return c;
+}
+
+static biquad_t biquad_hp(f32 fc, f32 fs)
+{
+    assert(fc > 0.0f && fc < fs * 0.5f);
+    assert(fs > 0.0f);
+    static const f32 SQRT2 = 1.41421356237309504880f;
+    f32 K    = tanf(3.14159265358979323846f * fc / fs);
+    f32 K2   = K * K;
+    f32 norm = 1.0f / (1.0f + K * SQRT2 + K2);
+    biquad_t c;
+    c.b0 =  norm;
+    c.b1 = -2.0f * norm;
+    c.b2 =  norm;
+    c.a1 = 2.0f * (K2 - 1.0f) * norm;
+    c.a2 = (1.0f - K * SQRT2 + K2) * norm;
+    return c;
+}
+
+/* Direct Form II Transposed; zero initial state; dst may equal src (in-place). */
+static void biquad_process(const biquad_t *c, const f32 *src, f32 *dst, i32 n)
+{
+    assert(c   != NULL);
+    assert(src != NULL);
+    assert(dst != NULL);
+    assert(n   >  0);
+    f32 w1 = 0.0f, w2 = 0.0f;
+    for (i32 i = 0; i < n; i++) {
+        f32 x  = src[i];
+        f32 y  = c->b0 * x + w1;
+        w1     = c->b1 * x - c->a1 * y + w2;
+        w2     = c->b2 * x - c->a2 * y;
+        dst[i] = y;
+    }
+}
+
+/* Fill BAND_W screen points for one band sub-panel from s->band_scratch[].
+ * Runs zero-crossing + xcorr alignment against prev_win for stable display.
+ * x_offset is 0, BAND_W, or 2*BAND_W for bass, mids, highs respectively. */
+static void fill_band_pts(spectrum_t *s, SDL_FPoint *pts, f32 *smooth,
+                          f32 *prev_win, i32 x_offset,
+                          i32 plot_y, i32 plot_h, i32 win, i32 n,
+                          f32 smooth_coeff)
+{
+    assert(s            != NULL);
+    assert(pts          != NULL);
+    assert(smooth       != NULL);
+    assert(prev_win     != NULL);
+    assert(plot_h       >  0);
+    assert(BAND_W       >  0);
+    assert(n            >  0);
+    assert(smooth_coeff >= 0.0f && smooth_coeff < 1.0f);
+
+    i32 ss = n - 1 - win;
+    if (ss < 1) { ss = 1; }
+    i32 se = ss - WAVE_TRIGGER_RANGE;
+    if (se < 1) { se = 1; }
+    i32 trigger = -1;
+    for (i32 i = se; i <= ss; i++) {
+        if (s->band_scratch[i - 1] < 0.0f && s->band_scratch[i] >= 0.0f) {
+            trigger = i;
+            break;
+        }
+    }
+    i32 zc = (trigger >= 0) ? trigger : (n - win);
+    if (zc < 0)       { zc = 0; }
+    if (zc + win > n) { zc = n - win; }
+
+    i32 start = xcorr_best_start(s->band_scratch, n, win, prev_win, zc, BAND_W);
+    if (start < 0)       { start = 0; }
+    if (start + win > n) { start = n - win; }
+
+    f32 half_h = (f32)plot_h * 0.5f;
+    for (i32 x = 0; x < BAND_W; x++) {
+        i32 src = start + x * win / BAND_W;
+        if (src < 0)  { src = 0; }
+        if (src >= n) { src = n - 1; }
+        f32 raw = s->band_scratch[src];
+        if (raw >  1.0f) { raw =  1.0f; }
+        if (raw < -1.0f) { raw = -1.0f; }
+        prev_win[x] = raw;
+        smooth[x]   = smooth_coeff * smooth[x]
+                    + (1.0f - smooth_coeff) * raw;
+        f32 y = (f32)plot_y + half_h * (1.0f - smooth[x]);
+        if (y < (f32)plot_y)            { y = (f32)plot_y; }
+        if (y > (f32)(plot_y + plot_h)) { y = (f32)(plot_y + plot_h); }
+        pts[x].x = (f32)(SPEC_X + x_offset + x);
+        pts[x].y = y;
+    }
+}
+
+void spectrum_update_bands(spectrum_t *s, const f32 *samples, i32 n,
+                           f32 sample_rate, i32 plot_y, i32 plot_h)
+{
+    assert(s           != NULL);
+    assert(samples     != NULL);
+    assert(n > 0 && n <= FFT_SIZE);
+    assert(sample_rate >  0.0f);
+    assert(plot_h      >  0);
+    assert(BAND_W      >  0);
+    assert(SPEC_W == 3 * BAND_W);
+
+    i32 bass_win = (i32)(BAND_BASS_WINDOW_S * sample_rate);
+    i32 mids_win = (i32)(BAND_MIDS_WINDOW_S * sample_rate);
+    i32 high_win = (i32)(BAND_HIGH_WINDOW_S * sample_rate);
+    if (bass_win < 1) { bass_win = 1; } if (bass_win > n) { bass_win = n; }
+    if (mids_win < 1) { mids_win = 1; } if (mids_win > n) { mids_win = n; }
+    if (high_win < 1) { high_win = 1; } if (high_win > n) { high_win = n; }
+
+    biquad_t lp_bass = biquad_lp(DECOMP_BASS_HZ, sample_rate);
+    biquad_t hp_bass = biquad_hp(DECOMP_BASS_HZ, sample_rate);
+    biquad_t lp_mids = biquad_lp(DECOMP_MIDS_HZ, sample_rate);
+    biquad_t hp_mids = biquad_hp(DECOMP_MIDS_HZ, sample_rate);
+
+    biquad_process(&lp_bass, samples, s->band_scratch, n);
+    fill_band_pts(s, s->bass_pts, s->smooth_bass, s->prev_bass,
+                  0, plot_y, plot_h, bass_win, n, BAND_BASS_SMOOTH);
+
+    biquad_process(&hp_bass, samples, s->band_scratch, n);
+    biquad_process(&lp_mids, s->band_scratch, s->band_scratch, n);
+    fill_band_pts(s, s->mid_pts, s->smooth_mid, s->prev_mid,
+                  BAND_W, plot_y, plot_h, mids_win, n, BAND_MIDS_SMOOTH);
+
+    biquad_process(&hp_mids, samples, s->band_scratch, n);
+    fill_band_pts(s, s->high_pts, s->smooth_high, s->prev_high,
+                  2 * BAND_W, plot_y, plot_h, high_win, n, BAND_HIGH_SMOOTH);
 }

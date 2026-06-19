@@ -49,6 +49,10 @@ typedef enum {
     UI_ACTION_SYNTH_NOTE_SET,    /* dropdown item selected — synth_dd_select   */
     /* Graph display mode */
     UI_ACTION_GRAPH_MODE,        /* graph_mode already updated by ui.c         */
+    /* Band-decompose toggle */
+    UI_ACTION_WAVE_DECOMPOSE,    /* wave_decompose toggled; already updated by ui.c */
+    /* Window */
+    UI_ACTION_FULLSCREEN,        /* toggle SDL fullscreen (F11)                */
 } ui_action_t;
 
 /* ── Module state ────────────────────────────────────────────────────────── */
@@ -92,6 +96,10 @@ typedef struct {
     /* Graph display mode — orthogonal to APP_MODE_PLAYER/SYNTH, persists across
      * mode switches.  Initialised to GRAPH_MODE_FREQ (= 0) by SDL_memset. */
     graph_mode_t graph_mode;
+    /* Frequency-band decompose toggle — splits the time-domain area into three
+     * side-by-side sub-panels (bass / mids / highs).  Initialised false by SDL_memset.
+     * No effect when graph_mode == GRAPH_MODE_FREQ. */
+    bool wave_decompose;
 } ui_t;
 
 /* ── Public interface ────────────────────────────────────────────────────── */
@@ -134,11 +142,18 @@ ui_action_t ui_on_mouse_up(ui_t *ui, const SDL_MouseButtonEvent *e);
 
 /*
  * Handle a key-down event.
- * Space → UI_ACTION_PLAY_PAUSE
- * Left  → UI_ACTION_REWIND
- * Right → UI_ACTION_NEXT
+ * Space   → UI_ACTION_PLAY_PAUSE
+ * Left    → UI_ACTION_REWIND
+ * Right   → UI_ACTION_NEXT
+ * F11     → UI_ACTION_FULLSCREEN
+ * S       → GRAPH_MODE_FREQ  (spec)
+ * W       → GRAPH_MODE_TIME  (wave)
+ * B       → GRAPH_MODE_BOTH  (both)
+ * D       → toggle wave_decompose
+ * Shift+P → APP_MODE_PLAYER
+ * Shift+S → APP_MODE_SYNTH
  */
-ui_action_t ui_on_key(const SDL_KeyboardEvent *e);
+ui_action_t ui_on_key(ui_t *ui, const SDL_KeyboardEvent *e, app_mode_t mode);
 
 /*
  * Handle a mouse-wheel event.  lx, ly are logical renderer coordinates.

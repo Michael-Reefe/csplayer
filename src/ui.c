@@ -25,11 +25,11 @@
 
 /* Playlist scrollbar (rightmost strip of the playlist panel). */
 #define PL_SB_W     5
-#define PL_SB_X     (LOG_W - PL_SB_W)              /* = 507 */
+#define PL_SB_X     (LOG_W - PL_SB_W)              /* = 635 */
 
 /* Delete button — sits immediately left of the scrollbar. */
 #define PL_DEL_W    12
-#define PL_DEL_X    (PL_SB_X - PL_DEL_W - 2)       /* = 493 */
+#define PL_DEL_X    (PL_SB_X - PL_DEL_W - 2)       /* = 621 */
 
 /* Seek bar geometry (after the volume slider). */
 #define SEEK_X   (VOL_X + VOL_W + 4)   /* = 112 */
@@ -649,6 +649,118 @@ static void draw_graph_buttons(SDL_Renderer *r, const ui_t *ui)
         set_col(r, COL_TEXT);
         (void)SDL_RenderDebugText(r, lx, ly, labels[b]);
     }
+
+    /* "Deconstruct" toggle: bottom-left of the panel, only when time-domain is visible. */
+    if (ui->graph_mode != GRAPH_MODE_FREQ) {
+        if (ui->wave_decompose) { set_col(r, COL_BTN_HOT); } else { set_col(r, COL_BTN); }
+        fill_rect(r, (f32)DECOMP_BTN_X, (f32)DECOMP_BTN_Y,
+                     (f32)DECOMP_BTN_W,  (f32)GRAPH_BTN_H);
+        set_col(r, COL_BORDER);
+        outline_rect(r, (f32)DECOMP_BTN_X, (f32)DECOMP_BTN_Y,
+                        (f32)DECOMP_BTN_W,  (f32)GRAPH_BTN_H);
+        f32 blx = (f32)(DECOMP_BTN_X + (DECOMP_BTN_W - 11 * FONT_W) / 2);
+        f32 bly = (f32)(DECOMP_BTN_Y + (GRAPH_BTN_H - FONT_H) / 2);
+        set_col(r, COL_TEXT);
+        (void)SDL_RenderDebugText(r, blx, bly, "Deconstruct");
+    }
+}
+
+/*
+ * Draw axes for three side-by-side band sub-panels within the time-domain rect.
+ * Each BAND_W-wide panel has a left border, horizontal midline, and a label.
+ */
+static void draw_band_axes(SDL_Renderer *r, i32 plot_y, i32 plot_h)
+{
+    assert(r      != NULL);
+    assert(plot_h >  0);
+    assert(BAND_W >  0);
+
+    static const char *const band_labels[3]  = { "Bass", "Mids", "High" };
+    static const i32         band_window_ms[3] = { 50, 10, 5 };
+    bool at_bottom = (plot_y + plot_h == SPEC_Y + SPEC_H);
+
+    set_col(r, COL_PANEL);
+    fill_rect(r, (f32)SPEC_X, (f32)plot_y, (f32)SPEC_W, (f32)plot_h);
+
+    /* Top and bottom borders spanning the full panel width. */
+    set_col(r, COL_AXIS);
+    (void)SDL_RenderLine(r, (f32)SPEC_X, (f32)plot_y,
+                            (f32)(SPEC_X + SPEC_W), (f32)plot_y);
+    (void)SDL_RenderLine(r, (f32)SPEC_X, (f32)(plot_y + plot_h),
+                            (f32)(SPEC_X + SPEC_W), (f32)(plot_y + plot_h));
+
+    /* Amplitude labels: +1 (top), 0 (middle), -1 (bottom) — left of first panel. */
+    for (i32 t = 0; t < NUM_AMP_LABELS; t++) {
+        i32 llen = (i32)SDL_strlen(amp_labels[t]);
+        f32 lx   = (f32)(SPEC_X - llen * FONT_W - 2);
+        f32 ly   = (f32)(plot_y + (i32)(amp_frac[t] * (f32)plot_h) - FONT_H / 2);
+        if (t == 0 && plot_y != SPEC_Y) { ly = (f32)plot_y; }
+        if (lx < 0.0f) { lx = 0.0f; }
+        set_col(r, COL_TICK);
+        (void)SDL_RenderDebugText(r, lx, ly, amp_labels[t]);
+    }
+
+    for (i32 b = 0; b < 3; b++) {
+        i32 bx = SPEC_X + b * BAND_W;
+
+        /* Left border / divider for this sub-panel. */
+        set_col(r, COL_AXIS);
+        (void)SDL_RenderLine(r, (f32)bx, (f32)plot_y,
+                                (f32)bx, (f32)(plot_y + plot_h));
+
+        /* Horizontal zero-amplitude midline. */
+        (void)SDL_RenderLine(r, (f32)bx,            (f32)(plot_y + plot_h / 2),
+                                (f32)(bx + BAND_W), (f32)(plot_y + plot_h / 2));
+
+        /* Band label centred at the top of the sub-panel. */
+        i32 llen = (i32)SDL_strlen(band_labels[b]);
+        f32 lx   = (f32)(bx + (BAND_W - llen * FONT_W) / 2);
+        set_col(r, COL_DIM);
+        (void)SDL_RenderDebugText(r, lx, (f32)(plot_y + 2), band_labels[b]);
+
+        /* Time tick marks at 0, 10, 20 ms; labels below the panel when at_bottom.
+         * At internal dividers the "20" of one panel and the "0" of the next share
+         * the same x — right-justify "20" and left-justify "0" to keep them clear. */
+        for (i32 t = 0; t <= 2; t++) {
+            i32 px = bx + t * (BAND_W - 1) / 2;
+            set_col(r, COL_AXIS);
+            (void)SDL_RenderLine(r, (f32)px, (f32)(plot_y + plot_h - 3),
+                                    (f32)px, (f32)(plot_y + plot_h));
+            if (at_bottom) {
+                char lbuf[4];
+                (void)SDL_snprintf(lbuf, sizeof(lbuf), "%d", t * band_window_ms[b] / 2);
+                i32 llen2 = (i32)SDL_strlen(lbuf);
+                f32 lx2;
+                if      (t == 2 && b < 2) { lx2 = (f32)(px - llen2 * FONT_W - 2); }
+                else if (t == 0 && b > 0) { lx2 = (f32)(px + 2); }
+                else                      { lx2 = (f32)(px - llen2 * FONT_W / 2); }
+                set_col(r, COL_TICK);
+                (void)SDL_RenderDebugText(r, lx2, (f32)(plot_y + plot_h + 4), lbuf);
+            }
+        }
+    }
+
+    /* Right border. */
+    set_col(r, COL_AXIS);
+    (void)SDL_RenderLine(r, (f32)(SPEC_X + SPEC_W), (f32)plot_y,
+                            (f32)(SPEC_X + SPEC_W), (f32)(plot_y + plot_h));
+}
+
+/*
+ * Draw the three band waveform lines (orange / green / cyan).
+ */
+static void draw_band_lines(SDL_Renderer *r, const spectrum_t *spectrum)
+{
+    assert(r        != NULL);
+    assert(spectrum != NULL);
+    assert(BAND_W   >  0);
+
+    set_col(r, COL_BASS);
+    (void)SDL_RenderLines(r, spectrum->bass_pts, BAND_W);
+    set_col(r, COL_WAVE);
+    (void)SDL_RenderLines(r, spectrum->mid_pts,  BAND_W);
+    set_col(r, COL_HIGHS);
+    (void)SDL_RenderLines(r, spectrum->high_pts, BAND_W);
 }
 
 /*
@@ -669,15 +781,25 @@ static void draw_graph(SDL_Renderer *r, const spectrum_t *spectrum,
         draw_spectrum_line(r, spectrum);
         break;
     case GRAPH_MODE_TIME:
-        draw_time_axes(r, SPEC_Y, SPEC_H);
-        draw_time_line(r, spectrum);
+        if (ui->wave_decompose) {
+            draw_band_axes(r, SPEC_Y, SPEC_H);
+            draw_band_lines(r, spectrum);
+        } else {
+            draw_time_axes(r, SPEC_Y, SPEC_H);
+            draw_time_line(r, spectrum);
+        }
         break;
     case GRAPH_MODE_BOTH: {
         i32 half = SPEC_H / 2;
         draw_freq_axes(r, SPEC_Y, half);
         draw_spectrum_line(r, spectrum);
-        draw_time_axes(r, SPEC_Y + half, half);
-        draw_time_line(r, spectrum);
+        if (ui->wave_decompose) {
+            draw_band_axes(r, SPEC_Y + half, half);
+            draw_band_lines(r, spectrum);
+        } else {
+            draw_time_axes(r, SPEC_Y + half, half);
+            draw_time_line(r, spectrum);
+        }
         break;
     }
     case GRAPH_MODE_COUNT:
@@ -937,7 +1059,7 @@ static void draw_playlist(SDL_Renderer *r, const playlist_t *pl, const ui_t *ui)
 
 /* Instrument dropdown starts immediately below row 0. */
 #define DD_INST_Y  (PL_Y + 16)
-/* Note dropdown: PL_Y+32+64=290 overflows LOG_H=288, so pin to bottom. */
+/* Note dropdown pinned to the bottom of the visible area. */
 #define DD_NOTE_Y  (LOG_H - DD_H)
 
 /*
@@ -1226,6 +1348,15 @@ static bool in_graph_btn(f32 lx, f32 ly, i32 btn_idx)
             ly >= (f32)by && ly < (f32)(by + GRAPH_BTN_H));
 }
 
+/* Hit-test the "Deconstruct" decompose-toggle button. */
+static bool in_decomp_btn(f32 lx, f32 ly)
+{
+    assert(DECOMP_BTN_W > 0);
+    assert(GRAPH_BTN_H  > 0);
+    return (lx >= (f32)DECOMP_BTN_X && lx < (f32)(DECOMP_BTN_X + DECOMP_BTN_W) &&
+            ly >= (f32)DECOMP_BTN_Y && ly < (f32)(DECOMP_BTN_Y + GRAPH_BTN_H));
+}
+
 static bool in_synth_inst_row(f32 lx, f32 ly)
 {
     assert(PL_Y >= 0);
@@ -1357,6 +1488,12 @@ ui_action_t ui_on_mouse_down(ui_t *ui, const SDL_MouseButtonEvent *e,
      * transport / control hit tests can intercept overlapping rows. */
     if (mode == APP_MODE_SYNTH && (ui->synth_inst_open || ui->synth_note_open)) {
         return mouse_down_synth(ui, lx, ly);
+    }
+
+    /* "Deconstruct" toggle — only visible when time-domain is shown. */
+    if (ui->graph_mode != GRAPH_MODE_FREQ && in_decomp_btn(lx, ly)) {
+        ui->wave_decompose = !ui->wave_decompose;
+        return UI_ACTION_WAVE_DECOMPOSE;
     }
 
     /* Graph mode toggle buttons — active in both app modes, checked first. */
@@ -1513,16 +1650,42 @@ ui_action_t ui_on_mouse_up(ui_t *ui, const SDL_MouseButtonEvent *e)
     return UI_ACTION_NONE;
 }
 
-ui_action_t ui_on_key(const SDL_KeyboardEvent *e)
+ui_action_t ui_on_key(ui_t *ui, const SDL_KeyboardEvent *e, app_mode_t mode)
 {
-    assert(e != NULL);
+    assert(ui != NULL);
+    assert(e  != NULL);
     assert(e->type == SDL_EVENT_KEY_DOWN);
+
+    bool shift = (e->mod & SDL_KMOD_SHIFT) != 0;
 
     switch (e->scancode) {
     case SDL_SCANCODE_SPACE: return UI_ACTION_PLAY_PAUSE;
     case SDL_SCANCODE_LEFT:  return UI_ACTION_REWIND;
     case SDL_SCANCODE_RIGHT: return UI_ACTION_NEXT;
-    default:                 break;
+    case SDL_SCANCODE_F11:   return UI_ACTION_FULLSCREEN;
+    case SDL_SCANCODE_S:
+        if (shift) {
+            if (mode == APP_MODE_SYNTH) { return UI_ACTION_NONE; }
+            return UI_ACTION_MODE_TOGGLE;
+        }
+        ui->graph_mode = GRAPH_MODE_FREQ;
+        return UI_ACTION_GRAPH_MODE;
+    case SDL_SCANCODE_W:
+        ui->graph_mode = GRAPH_MODE_TIME;
+        return UI_ACTION_GRAPH_MODE;
+    case SDL_SCANCODE_B:
+        ui->graph_mode = GRAPH_MODE_BOTH;
+        return UI_ACTION_GRAPH_MODE;
+    case SDL_SCANCODE_D:
+        ui->wave_decompose = !ui->wave_decompose;
+        return UI_ACTION_WAVE_DECOMPOSE;
+    case SDL_SCANCODE_P:
+        if (shift) {
+            if (mode == APP_MODE_PLAYER) { return UI_ACTION_NONE; }
+            return UI_ACTION_MODE_TOGGLE;
+        }
+        break;
+    default: break;
     }
     return UI_ACTION_NONE;
 }

@@ -319,6 +319,10 @@ static void update_spectrum(app_t *app)
     i32 ty = (app->ui.graph_mode == GRAPH_MODE_BOTH) ? SPEC_Y + th : SPEC_Y;
     spectrum_update_time(&app->spectrum, app->pcm_snapshot, RING_SIZE, sr, ty, th);
 
+    if (app->ui.wave_decompose && app->ui.graph_mode != GRAPH_MODE_FREQ) {
+        spectrum_update_bands(&app->spectrum, app->pcm_snapshot, RING_SIZE, sr, ty, th);
+    }
+
     if (app->ui.graph_mode == GRAPH_MODE_BOTH) {
         spectrum_map_freq_pts(&app->spectrum, SPEC_Y, SPEC_H / 2);
     }
@@ -499,6 +503,13 @@ static void dispatch_action(app_t *app, ui_action_t action)
     case UI_ACTION_GRAPH_MODE:
         /* graph_mode already updated by ui.c; no further state change needed */
         break;
+    case UI_ACTION_WAVE_DECOMPOSE:
+        /* wave_decompose already toggled by ui.c; no further state change needed */
+        break;
+    case UI_ACTION_FULLSCREEN:
+        (void)SDL_SetWindowFullscreen(app->window,
+            !(SDL_GetWindowFlags(app->window) & SDL_WINDOW_FULLSCREEN));
+        break;
     default:
         break;
     }
@@ -610,7 +621,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
     if (event->type == SDL_EVENT_MOUSE_WHEEL)        { handle_mouse_wheel(app, event);  }
 
     if (event->type == SDL_EVENT_KEY_DOWN && !event->key.repeat) {
-        dispatch_action(app, ui_on_key(&event->key));
+        dispatch_action(app, ui_on_key(&app->ui, &event->key, app->mode));
     }
 
     return SDL_APP_CONTINUE;
