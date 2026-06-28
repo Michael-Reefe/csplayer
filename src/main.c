@@ -55,6 +55,9 @@ typedef struct {
 
     /* Scratch buffer for the PCM snapshot passed to fft_process. */
     f32 pcm_snapshot[RING_SIZE];
+
+    /* SDL_GetTicksNS() at the end of the previous frame, for frame pacing. */
+    u64 last_frame_ns;
 } app_t;
 
 /* Single global instance — zero-initialised in .bss (NASA Rule 3). */
@@ -338,6 +341,15 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 
     ui_draw(app->renderer, &app->audio, &app->spectrum,
             &app->playlist, &app->ui, app->mode, &app->synth);
+
+    /* Pace the loop to TARGET_FPS.  vsync alone does not bound CPU on every
+     * backend (notably macOS/Metal), so sleep off any remaining frame time. */
+    u64 now     = SDL_GetTicksNS();
+    u64 elapsed = now - app->last_frame_ns;
+    if (elapsed < FRAME_TIME_NS) {
+        SDL_DelayNS(FRAME_TIME_NS - elapsed);
+    }
+    app->last_frame_ns = SDL_GetTicksNS();
 
     return SDL_APP_CONTINUE;
 }
@@ -645,6 +657,9 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result)
 
     if (app->ui.hdr_title_tex  != NULL) { SDL_DestroyTexture(app->ui.hdr_title_tex);  }
     if (app->ui.hdr_artist_tex != NULL) { SDL_DestroyTexture(app->ui.hdr_artist_tex); }
+    for (i32 i = 0; i < (i32)SDL_arraysize(app->ui.pl_row_tex); i++) {
+        if (app->ui.pl_row_tex[i] != NULL) { SDL_DestroyTexture(app->ui.pl_row_tex[i]); }
+    }
     if (app->ui.font != NULL) {
         TTF_CloseFont(app->ui.font);
         app->ui.font = NULL;

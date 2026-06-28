@@ -93,6 +93,12 @@ typedef struct {
     f32          hdr_artist_w;                /* logical px width of artist part  */
     char         hdr_cache_title[TITLE_MAX_LEN];       /* title at last build     */
     char         hdr_cache_artist[TITLE_MAX_LEN + 4];  /* artist at last build    */
+    /* Playlist row title texture cache — one slot per visible row.  Each slot's
+     * texture is rebuilt only when the title shown in that slot changes (e.g. on
+     * scroll), so the steady-state render loop does no per-row TTF rasterisation
+     * or GPU texture allocation (mirrors the header cache; NASA Rule 3). */
+    SDL_Texture *pl_row_tex[PL_H / PL_ROW];
+    char         pl_row_text[PL_H / PL_ROW][TITLE_MAX_LEN];
     /* Graph display mode — orthogonal to APP_MODE_PLAYER/SYNTH, persists across
      * mode switches.  Initialised to GRAPH_MODE_FREQ (= 0) by SDL_memset. */
     graph_mode_t graph_mode;

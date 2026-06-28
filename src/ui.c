@@ -76,45 +76,6 @@ static void outline_rect(SDL_Renderer *r, f32 x, f32 y, f32 w, f32 h)
     (void)SDL_RenderRect(r, &rc);
 }
 
-/* ── Internal: Unicode-aware text renderer ───────────────────────────────── */
-
-/*
- * Render a UTF-8 string using the Unifont TTF font if available, otherwise
- * fall back to SDL_RenderDebugText (ASCII only, 8×8 built-in font).
- * The clip rect must be set by the caller if overflow protection is needed.
- */
-static void render_utf8(SDL_Renderer *r, TTF_Font *font,
-                         const char *text, f32 x, f32 y,
-                         i32 rv, i32 gv, i32 bv, i32 av)
-{
-    assert(r    != NULL);
-    assert(text != NULL);
-    if (text[0] == '\0') { return; }
-    if (font == NULL) {
-        set_col(r, rv, gv, bv, av);
-        (void)SDL_RenderDebugText(r, x, y, text);
-        return;
-    }
-    SDL_Color col = { (Uint8)rv, (Uint8)gv, (Uint8)bv, (Uint8)av };
-    SDL_Surface *surf = TTF_RenderText_Solid(font, text, (size_t)0, col);
-    if (surf == NULL) { return; }
-    SDL_Texture *tex = SDL_CreateTextureFromSurface(r, surf);
-    SDL_DestroySurface(surf);
-    if (tex == NULL) { return; }
-    (void)SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
-    /* Nearest-neighbour: the texture was rasterised at DISPLAY_SCALE × logical
-     * size; downscaling 1/DISPLAY_SCALE here keeps the pixels sharp after SDL's
-     * integer upscale brings them back to physical-pixel resolution. */
-    (void)SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
-    f32 tw = 0.0f, th = 0.0f;
-    (void)SDL_GetTextureSize(tex, &tw, &th);
-    SDL_FRect dst = { x, y,
-                      tw / (f32)DISPLAY_SCALE,
-                      th / (f32)DISPLAY_SCALE };
-    (void)SDL_RenderTexture(r, tex, NULL, &dst);
-    SDL_DestroyTexture(tex);
-}
-
 /* ── Internal: axis tick tables (static, compile-time constants) ─────────── */
 
 /* Frequency tick positions for the X axis. */
@@ -958,8 +919,50 @@ static void draw_controls(SDL_Renderer *r, const audio_t *audio, const ui_t *ui)
     outline_rect(r, (f32)SEEK_X, (f32)SEEK_Y, (f32)SEEK_W, (f32)SEEK_H);
 }
 
+/*
+ * Render the title for visible row slot (0 .. PL_H/PL_ROW-1), clipped to the
+ * title column.  When a TTF font is loaded the texture is cached per slot and
+ * rebuilt only when the displayed title changes, so the steady state allocates
+ * nothing (NASA Rule 3).  Without a font, falls back to the built-in ASCII font.
+ */
+static void draw_pl_row_title(SDL_Renderer *r, const playlist_t *pl,
+                              ui_t *ui, i32 idx, i32 slot,
+                              i32 x_title, i32 ry, i32 ty, i32 clip_w)
+{
+    assert(r  != NULL);
+    assert(pl != NULL);
+    assert(ui != NULL);
+    assert(slot >= 0 && slot < (i32)SDL_arraysize(ui->pl_row_tex));
+    if (clip_w <= 0) { return; }
+
+    const char *title = pl->entries[idx].title;
+    SDL_Rect title_clip = { x_title, ry, clip_w, PL_ROW };
+    (void)SDL_SetRenderClipRect(r, &title_clip);
+
+    if (ui->font != NULL) {
+        /* Rebuild this slot's cached texture only when its title changes. */
+        if (SDL_strcmp(title, ui->pl_row_text[slot]) != 0) {
+            if (ui->pl_row_tex[slot] != NULL) {
+                SDL_DestroyTexture(ui->pl_row_tex[slot]);
+            }
+            ui->pl_row_tex[slot] = build_text_tex(r, ui->font, title, COL_TEXT);
+            (void)SDL_strlcpy(ui->pl_row_text[slot], title,
+                              sizeof(ui->pl_row_text[slot]));
+        }
+        if (ui->pl_row_tex[slot] != NULL) {
+            render_tex_at(r, ui->pl_row_tex[slot], (f32)x_title, (f32)ty);
+        }
+    } else {
+        set_col(r, COL_TEXT);
+        (void)SDL_RenderDebugText(r, (f32)x_title, (f32)ty, title);
+    }
+
+    (void)SDL_SetRenderClipRect(r, NULL);
+}
+
 static void draw_pl_row_text(SDL_Renderer *r, const playlist_t *pl,
-                              const ui_t *ui, i32 idx, i32 x_title, i32 ry, i32 ty)
+                              ui_t *ui, i32 idx, i32 slot,
+                              i32 x_title, i32 ry, i32 ty)
 {
     assert(r  != NULL);
     assert(pl != NULL);
@@ -973,14 +976,7 @@ static void draw_pl_row_text(SDL_Renderer *r, const playlist_t *pl,
     }
 
     i32 clip_right = (tlen > 0) ? PL_DEL_X - tlen * FONT_W - 8 : PL_DEL_X - 4;
-    i32 clip_w     = clip_right - x_title;
-    if (clip_w > 0) {
-        SDL_Rect title_clip = { x_title, ry, clip_w, PL_ROW };
-        (void)SDL_SetRenderClipRect(r, &title_clip);
-        render_utf8(r, ui->font, pl->entries[idx].title,
-                    (f32)x_title, (f32)ty, COL_TEXT);
-        (void)SDL_SetRenderClipRect(r, NULL);
-    }
+    draw_pl_row_title(r, pl, ui, idx, slot, x_title, ry, ty, clip_right - x_title);
 
     if (tlen > 0) {
         f32 tx = (f32)(PL_DEL_X - tlen * FONT_W - 4);
@@ -997,7 +993,7 @@ static void draw_pl_row_text(SDL_Renderer *r, const playlist_t *pl,
  * Draw a single playlist row (track number, title, duration, delete button).
  */
 static void draw_playlist_row(SDL_Renderer *r, const playlist_t *pl,
-                               const ui_t *ui, i32 idx, i32 row)
+                               ui_t *ui, i32 idx, i32 row)
 {
     assert(r   != NULL);
     assert(pl  != NULL);
@@ -1032,7 +1028,7 @@ static void draw_playlist_row(SDL_Renderer *r, const playlist_t *pl,
     set_col(r, COL_DIM);
     (void)SDL_RenderDebugText(r, (f32)x_num, (f32)ty, numbuf);
 
-    draw_pl_row_text(r, pl, ui, idx, x_title, ry, ty);
+    draw_pl_row_text(r, pl, ui, idx, row, x_title, ry, ty);
 }
 
 /*
@@ -1062,7 +1058,7 @@ static void draw_playlist_scrollbar(SDL_Renderer *r, const playlist_t *pl)
 /*
  * Draw the playlist panel.
  */
-static void draw_playlist(SDL_Renderer *r, const playlist_t *pl, const ui_t *ui)
+static void draw_playlist(SDL_Renderer *r, const playlist_t *pl, ui_t *ui)
 {
     assert(r  != NULL);
     assert(pl != NULL);

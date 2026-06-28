@@ -51,6 +51,14 @@ typedef  double complex c64;
  * logical size so FreeType rasterises at the physical pixel resolution. */
 #define DISPLAY_SCALE  (PHYS_W / LOG_W)
 
+/* Render-loop frame cap.  SDL's default SDL_AppIterate rate is "as fast as
+ * possible"; vsync only throttles the CPU on backends where present blocks the
+ * calling thread (e.g. Direct3D on Windows), not on macOS/Metal, where the loop
+ * would otherwise busy-spin at thousands of fps.  The loop is paced explicitly
+ * to this rate so CPU use is bounded on every platform. */
+#define TARGET_FPS     60
+#define FRAME_TIME_NS  (1000000000ULL / TARGET_FPS)
+
 /* ── FFT / audio capture ─────────────────────────────────────────────────── */
 /* FFT_SIZE must be a power of two.  8192 gives ≈5.4 Hz/bin at 44100 Hz. */
 #define FFT_SIZE      8192
