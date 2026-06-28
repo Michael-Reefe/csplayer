@@ -124,12 +124,15 @@ static f64 audio_elapsed_sec(const audio_t *audio)
            * (f64)audio->duration_frames / (f64)audio->sample_rate;
 }
 
-/* Convert a volume slider position [0,1] (linear in dB) to a linear gain. */
+/* Convert a volume slider position [0,1] (linear in dB) to a linear gain.
+ * The minimum slider position is a special case that mutes fully (gain 0);
+ * above it the mapping is logarithmic, from VOL_DB_MIN dB up to 0 dB. */
 static f32 vol_pos_to_gain(f32 pos)
 {
     assert(pos >= 0.0f);
     assert(pos <= 1.0f);
-    f32 db = VOL_DB_MIN * (1.0f - pos);   /* 0 → VOL_DB_MIN dB, 1 → 0 dB */
+    if (pos <= 0.0f) { return 0.0f; }     /* slider fully left → muted */
+    f32 db = VOL_DB_MIN * (1.0f - pos);   /* 0+ → VOL_DB_MIN dB, 1 → 0 dB */
     return powf(10.0f, db / 20.0f);
 }
 

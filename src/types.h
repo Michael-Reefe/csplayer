@@ -108,7 +108,7 @@ typedef  double complex c64;
 /* ── Volume ──────────────────────────────────────────────────────────────── */
 /* Minimum volume in dB; the volume slider maps linearly from
  * VOL_DB_MIN (slider pos 0) to 0 dB (slider pos 1). */
-#define VOL_DB_MIN  (-60.0f)
+#define VOL_DB_MIN  (-50.0f)
 
 /* ── Application mode ────────────────────────────────────────────────────── */
 typedef enum {

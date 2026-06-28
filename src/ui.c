@@ -682,7 +682,7 @@ static void draw_band_panel(SDL_Renderer *r, i32 b, i32 plot_y, i32 plot_h,
     assert(b >= 0 && b < 3);
     assert(plot_h > 0);
 
-    static const char *const band_labels[3]    = { "Bass", "Mids", "High" };
+    static const char *const band_labels[3]    = { "Amp(Low)", "Amp(Mid)", "Amp(High)" };
     static const i32         band_window_ms[3] = { 50, 10, 5 };
     i32 bx = SPEC_X + b * BAND_W;
 
@@ -695,11 +695,10 @@ static void draw_band_panel(SDL_Renderer *r, i32 b, i32 plot_y, i32 plot_h,
     (void)SDL_RenderLine(r, (f32)bx,            (f32)(plot_y + plot_h / 2),
                             (f32)(bx + BAND_W), (f32)(plot_y + plot_h / 2));
 
-    /* Band label centred at the top of the sub-panel. */
-    i32 llen = (i32)SDL_strlen(band_labels[b]);
-    f32 lx   = (f32)(bx + (BAND_W - llen * FONT_W) / 2);
+    /* Band label, left-aligned at the top of the sub-panel.  Left alignment also
+     * keeps the "High" panel's label clear of the graph-mode buttons (top-right). */
     set_col(r, COL_DIM);
-    (void)SDL_RenderDebugText(r, lx, (f32)(plot_y + 2), band_labels[b]);
+    (void)SDL_RenderDebugText(r, (f32)(bx + 2), (f32)(plot_y + 2), band_labels[b]);
 
     /* Time tick marks at 0, 10, 20 ms; labels below the panel when at_bottom.
      * At internal dividers the "20" of one panel and the "0" of the next share
@@ -750,6 +749,16 @@ static void draw_band_axes(SDL_Renderer *r, i32 plot_y, i32 plot_h)
 
     for (i32 b = 0; b < 3; b++) {
         draw_band_panel(r, b, plot_y, plot_h, at_bottom);
+    }
+
+    /* X-axis title at bottom-right interior — same position as draw_time_axes,
+     * which falls inside the rightmost ("High") sub-panel. */
+    {
+        const char *xlabel = "Time (ms)";
+        i32 xlen = (i32)SDL_strlen(xlabel);
+        set_col(r, COL_DIM);
+        (void)SDL_RenderDebugText(r, (f32)(SPEC_X + SPEC_W - xlen * FONT_W - 2),
+                                     (f32)(plot_y + plot_h - FONT_H - 2), xlabel);
     }
 
     /* Right border. */
