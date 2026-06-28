@@ -1,3 +1,17 @@
+/*
+ * metadata.c — Artist-tag extraction from audio files.
+ *
+ * Detects the container from leading magic bytes (not the file extension) and
+ * reads the artist string from the matching tag format:
+ *   • MP3  — ID3v2.3/2.4 (TPE1 frame), falling back to ID3v1 (offset -128).
+ *   • OGG  — Vorbis comment (ARTIST=) in the second Ogg page.
+ *   • FLAC — Vorbis comment in the VORBIS_COMMENT metadata block.
+ *   • WAV  — RIFF LIST/INFO IART sub-chunk.
+ * All parsing uses fixed-size stack buffers and bounded loops (NASA Rule 2/3).
+ *
+ * Copyright (C) 2026 Michael Reefe.  Licensed under GPL-3.0.
+ */
+
 #include "metadata.h"
 
 #include <stdio.h>
@@ -208,7 +222,7 @@ static i32 read_ogg_page_data(FILE *f, u8 *buf, i32 buf_cap)
     i32 total = 0;
     for (u8 s = 0; s < nseg; s++) { total += segtab[s]; }
     if (total <= 0 || total > buf_cap) {
-        if (fseek(f, total, SEEK_CUR) != 0) { return -1; }
+        if (fseek(f, (long)total, SEEK_CUR) != 0) { return -1; }
         return 0;
     }
     if ((i32)fread(buf, 1, (size_t)total, f) != total) { return -1; }
@@ -315,13 +329,13 @@ static bool read_artist_wav(FILE *f, char *dst, i32 dst_len)
                 }
             } else {
                 /* Not INFO — skip rest of LIST. */
-                long skip = (long)chunk_size - 4;
-                if (skip > 0 && fseek(f, skip, SEEK_CUR) != 0) { break; }
+                i64 skip = (i64)chunk_size - 4;
+                if (skip > 0 && fseek(f, (long)skip, SEEK_CUR) != 0) { break; }
             }
         } else {
             /* Skip non-LIST chunk (pad to even size). */
-            long skip = (long)(chunk_size + (chunk_size & 1u));
-            if (skip > 0 && fseek(f, skip, SEEK_CUR) != 0) { break; }
+            i64 skip = (i64)chunk_size + (chunk_size & 1u);
+            if (skip > 0 && fseek(f, (long)skip, SEEK_CUR) != 0) { break; }
         }
     }
     return false;

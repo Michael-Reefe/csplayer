@@ -100,6 +100,12 @@ typedef struct {
      * side-by-side sub-panels (bass / mids / highs).  Initialised false by SDL_memset.
      * No effect when graph_mode == GRAPH_MODE_FREQ. */
     bool wave_decompose;
+    /* Sub-row remainder of mouse-wheel deltas for the discrete list/dropdown
+     * scrollers.  A traditional wheel sends dy = ±1 per notch (→ one step), but a
+     * trackpad sends many small fractional deltas; carrying the remainder here
+     * lets slow trackpad gestures accumulate instead of truncating to zero.
+     * Initialised to 0 by SDL_memset. */
+    f32 scroll_accum;
 } ui_t;
 
 /* ── Public interface ────────────────────────────────────────────────────── */

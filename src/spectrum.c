@@ -50,6 +50,10 @@ void spectrum_init_lut(spectrum_t *s, f32 sample_rate)
         s->prev_window[x] = 0.0f;
         s->smooth_time[x] = 0.0f;
     }
+
+    /* Force spectrum_update_bands() to rebuild its cached filter coefficients
+     * (the rate may have changed). */
+    s->band_coeff_rate = 0.0f;
 }
 
 void spectrum_update(spectrum_t *s, const fft_t *f)
@@ -202,8 +206,7 @@ void spectrum_update_time(spectrum_t *s, const f32 *samples, i32 n,
 }
 
 /* ── 2nd-order Butterworth biquad filters (Direct Form II Transposed) ──────── */
-
-typedef struct { f32 b0, b1, b2, a1, a2; } biquad_t;
+/* biquad_t is declared in spectrum.h so spectrum_t can cache coefficients. */
 
 static biquad_t biquad_lp(f32 fc, f32 fs)
 {
@@ -330,21 +333,25 @@ void spectrum_update_bands(spectrum_t *s, const f32 *samples, i32 n,
     if (mids_win < 1) { mids_win = 1; } if (mids_win > n) { mids_win = n; }
     if (high_win < 1) { high_win = 1; } if (high_win > n) { high_win = n; }
 
-    biquad_t lp_bass = biquad_lp(DECOMP_BASS_HZ, sample_rate);
-    biquad_t hp_bass = biquad_hp(DECOMP_BASS_HZ, sample_rate);
-    biquad_t lp_mids = biquad_lp(DECOMP_MIDS_HZ, sample_rate);
-    biquad_t hp_mids = biquad_hp(DECOMP_MIDS_HZ, sample_rate);
+    /* Coefficients depend only on sample_rate — rebuild only when it changes. */
+    if (sample_rate != s->band_coeff_rate) {
+        s->band_lp_bass    = biquad_lp(DECOMP_BASS_HZ, sample_rate);
+        s->band_hp_bass    = biquad_hp(DECOMP_BASS_HZ, sample_rate);
+        s->band_lp_mids    = biquad_lp(DECOMP_MIDS_HZ, sample_rate);
+        s->band_hp_mids    = biquad_hp(DECOMP_MIDS_HZ, sample_rate);
+        s->band_coeff_rate = sample_rate;
+    }
 
-    biquad_process(&lp_bass, samples, s->band_scratch, n);
+    biquad_process(&s->band_lp_bass, samples, s->band_scratch, n);
     fill_band_pts(s, s->bass_pts, s->smooth_bass, s->prev_bass,
                   0, plot_y, plot_h, bass_win, n, BAND_BASS_SMOOTH);
 
-    biquad_process(&hp_bass, samples, s->band_scratch, n);
-    biquad_process(&lp_mids, s->band_scratch, s->band_scratch, n);
+    biquad_process(&s->band_hp_bass, samples, s->band_scratch, n);
+    biquad_process(&s->band_lp_mids, s->band_scratch, s->band_scratch, n);
     fill_band_pts(s, s->mid_pts, s->smooth_mid, s->prev_mid,
                   BAND_W, plot_y, plot_h, mids_win, n, BAND_MIDS_SMOOTH);
 
-    biquad_process(&hp_mids, samples, s->band_scratch, n);
+    biquad_process(&s->band_hp_mids, samples, s->band_scratch, n);
     fill_band_pts(s, s->high_pts, s->smooth_high, s->prev_high,
                   2 * BAND_W, plot_y, plot_h, high_win, n, BAND_HIGH_SMOOTH);
 }

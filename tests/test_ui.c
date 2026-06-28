@@ -786,6 +786,48 @@ static void test_ui_scroll_playlist_nospace(void)
     TEST_END();
 }
 
+static void test_ui_scroll_playlist_trackpad(void)
+{
+    TEST_BEGIN("ui_scroll_playlist_trackpad");
+    /* Trackpad: sub-row deltas accumulate instead of truncating to zero, and
+     * the remainder carries across events. */
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    playlist_t pl = make_pl(20, 0);   /* max_scroll = 20 - 6 = 14 */
+    pl.scroll = 5;
+
+    /* Two small downward deltas (dy<0) total -0.6 → no whole step yet. */
+    ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, -0.3f, 0.5f, &pl, APP_MODE_PLAYER);
+    CHECK(pl.scroll == 5);
+    ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, -0.3f, 0.5f, &pl, APP_MODE_PLAYER);
+    CHECK(pl.scroll == 5);
+
+    /* A third delta pushes the accumulator past 1.0 → exactly one row moves. */
+    ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, -0.5f, 0.5f, &pl, APP_MODE_PLAYER);
+    CHECK(pl.scroll == 6);
+
+    /* Remainder (-0.1) carries: another -0.95 crosses the next whole step. */
+    ui_on_scroll(&ui, 100.0f, (f32)PL_Y + 5.0f, -0.95f, 0.5f, &pl, APP_MODE_PLAYER);
+    CHECK(pl.scroll == 7);
+    TEST_END();
+}
+
+static void test_ui_scroll_synth_row_trackpad(void)
+{
+    TEST_BEGIN("ui_scroll_synth_row_trackpad");
+    /* Over the instrument row, a sub-step trackpad delta yields no action until
+     * a full step accumulates (so a flick does not race through instruments). */
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    playlist_t pl = make_pl(0, -1);
+
+    ui_action_t act = ui_on_scroll(&ui, 100.0f, (f32)(PL_Y + 4),
+                                    0.4f, 0.0f, &pl, APP_MODE_SYNTH);
+    CHECK(act == UI_ACTION_NONE);
+    act = ui_on_scroll(&ui, 100.0f, (f32)(PL_Y + 4),
+                       0.7f, 0.0f, &pl, APP_MODE_SYNTH);
+    CHECK(act == UI_ACTION_SYNTH_INST_UP);
+    TEST_END();
+}
+
 static void test_ui_scroll_none(void)
 {
     TEST_BEGIN("ui_scroll_none");
@@ -1728,7 +1770,7 @@ void run_ui_tests(void)
         printf("  SKIP  all draw smoke tests (SDL_CreateWindow failed: %s)\n",
                SDL_GetError());
     } else {
-        g_renderer = SDL_CreateRenderer(g_window, NULL);
+        g_renderer = SDL_CreateRenderer(g_window, SDL_SOFTWARE_RENDERER);
         if (g_renderer == NULL) {
             printf("  SKIP  all draw smoke tests (SDL_CreateRenderer failed: %s)\n",
                    SDL_GetError());
@@ -1820,6 +1862,8 @@ void run_ui_tests(void)
     test_ui_scroll_playlist();
     test_ui_scroll_playlist_clamp();
     test_ui_scroll_playlist_nospace();
+    test_ui_scroll_playlist_trackpad();
+    test_ui_scroll_synth_row_trackpad();
     test_ui_scroll_none();
 
     /* ── Draw smoke tests (require renderer) ── */

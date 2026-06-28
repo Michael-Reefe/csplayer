@@ -390,16 +390,16 @@ static void dispatch_open_dialog(app_t *app)
     assert(app != NULL);
     assert(app->window != NULL);
     app->ui.dialog_open = true;
+    /* Filters must match the codecs enabled in CMakeLists.txt (Opus is OFF). */
     static const SDL_DialogFileFilter filters[] = {
-        { "Audio files", "wav;mp3;flac;ogg;opus" },
+        { "Audio files", "wav;mp3;flac;ogg" },
         { "WAV",  "wav"  },
         { "MP3",  "mp3"  },
         { "FLAC", "flac" },
         { "OGG",  "ogg"  },
-        { "OPUS", "opus" },
     };
     SDL_ShowOpenFileDialog(file_dialog_cb, app, app->window,
-                           filters, 4, NULL, true);
+                           filters, (i32)SDL_arraysize(filters), NULL, true);
 }
 
 static void dispatch_pl_remove(app_t *app)

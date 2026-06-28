@@ -11,5 +11,6 @@ CTestTestfile.cmake
 _deps
 CMakeUserPresets.json
 
+**/.DS_Store
 .claude/
 build/

@@ -485,6 +485,34 @@ static void test_bands_silence_iir(void)
     TEST_END();
 }
 
+static void test_bands_coeff_cache(void)
+{
+    TEST_BEGIN("bands_coeff_cache");
+    /* Coefficients are cached and only rebuilt when the sample rate changes. */
+    SDL_memset(g_samples, 0, sizeof(g_samples));
+
+    /* First call at 44.1 kHz builds the coefficients. */
+    spectrum_update_bands(&g_spec, g_samples, RING_SIZE, 44100.0f, SPEC_Y, SPEC_H);
+    CHECK(g_spec.band_coeff_rate == 44100.0f);
+    f32 b0_44k = g_spec.band_lp_bass.b0;
+
+    /* Second call at the same rate must NOT rebuild (cache-hit branch): the
+     * cached coefficients are unchanged. */
+    spectrum_update_bands(&g_spec, g_samples, RING_SIZE, 44100.0f, SPEC_Y, SPEC_H);
+    CHECK(g_spec.band_coeff_rate == 44100.0f);
+    CHECK(g_spec.band_lp_bass.b0 == b0_44k);
+
+    /* Changing the rate must rebuild (different cutoff/rate → different b0). */
+    spectrum_update_bands(&g_spec, g_samples, RING_SIZE, 48000.0f, SPEC_Y, SPEC_H);
+    CHECK(g_spec.band_coeff_rate == 48000.0f);
+    CHECK(g_spec.band_lp_bass.b0 != b0_44k);
+
+    /* spectrum_init_lut() resets the cache so the next call rebuilds. */
+    spectrum_init_lut(&g_spec, 48000.0f);
+    CHECK(g_spec.band_coeff_rate == 0.0f);
+    TEST_END();
+}
+
 /* ── Suite ───────────────────────────────────────────────────────────────── */
 
 void run_spectrum_tests(void)
@@ -524,6 +552,7 @@ void run_spectrum_tests(void)
     test_biquad_hp_attenuates_bass();
     test_bands_pts_bounds_iir();
     test_bands_silence_iir();
+    test_bands_coeff_cache();
 
     fft_quit(&g_fft);
 }

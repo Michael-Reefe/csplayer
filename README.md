@@ -84,9 +84,11 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Tests run without real audio hardware: the audio integration tests use SDL's
-built-in `dummy` driver and the draw tests use an offscreen renderer.  Exit
-code is non-zero if any test fails, making this suitable for CI.
+Tests run without real audio hardware or a GPU: SDL's built-in `dummy` audio
+and video drivers are used, and the draw tests render through the software
+renderer over the dummy driver's in-memory framebuffer (so no OpenGL/EGL
+library is required).  Exit code is non-zero if any test fails, making this
+suitable for CI.
 
 ### Building a packaged binary
 

@@ -1,9 +1,11 @@
 /*
  * test_main.c — Entry point for the csplayer test suite.
  *
- * Initialises SDL (dummy audio driver + offscreen video driver) so both unit
- * and integration tests run without real hardware.  Writes a 100 ms WAV file
- * of silence for audio_load tests, then calls each test suite in order.
+ * Initialises SDL (dummy audio + dummy video driver) so both unit and
+ * integration tests run without real hardware or a GPU/OpenGL library.  The UI
+ * draw tests render through SDL's software renderer over the dummy driver's
+ * in-memory framebuffer.  Writes a 100 ms WAV file of silence for audio_load
+ * tests, then calls each test suite in order.
  */
 
 #include <stdio.h>
@@ -83,11 +85,13 @@ static bool create_test_wav(const char *path)
 
 int main(void)
 {
-    /* Use virtual/headless SDL subsystems so tests run without hardware. */
+    /* Use virtual/headless SDL subsystems so tests run without hardware.
+     * The dummy video driver (unlike "offscreen") needs no OpenGL/EGL library,
+     * so window creation and the software renderer work on any machine. */
     SDL_SetEnvironmentVariable(SDL_GetEnvironment(),
                                "SDL_AUDIODRIVER", "dummy", true);
     SDL_SetEnvironmentVariable(SDL_GetEnvironment(),
-                               "SDL_VIDEODRIVER", "offscreen", true);
+                               "SDL_VIDEODRIVER", "dummy", true);
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS)) {
         fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());

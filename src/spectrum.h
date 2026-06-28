@@ -20,6 +20,10 @@
 
 /* ── Module state ────────────────────────────────────────────────────────── */
 
+/* 2nd-order biquad filter coefficients (Direct Form II Transposed).
+ * Defined here so spectrum_t can cache them across frames (see band_coeff_*). */
+typedef struct { f32 b0, b1, b2, a1, a2; } biquad_t;
+
 typedef struct {
     /* Smoothed dB value per pixel column.  Clamped to [DB_BOT, DB_TOP]. */
     f32        smooth_db[SPEC_W];
@@ -63,6 +67,16 @@ typedef struct {
     f32  prev_high[BAND_W];
     /* IIR filter output scratch: reused for each of the 3 bands in sequence. */
     f32  band_scratch[FFT_SIZE];
+
+    /* Cached band-filter coefficients.  Depend only on the sample rate, so they
+     * are rebuilt by spectrum_update_bands() only when band_coeff_rate changes
+     * (avoids per-frame tanf() calls).  band_coeff_rate is reset to 0 by
+     * spectrum_init_lut() so the next spectrum_update_bands() rebuilds them. */
+    biquad_t band_lp_bass;
+    biquad_t band_hp_bass;
+    biquad_t band_lp_mids;
+    biquad_t band_hp_mids;
+    f32      band_coeff_rate;
 } spectrum_t;
 
 /* ── Public interface ────────────────────────────────────────────────────── */

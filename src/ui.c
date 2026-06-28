@@ -379,6 +379,32 @@ static void draw_header_title(SDL_Renderer *r, const playlist_t *pl,
 }
 
 /*
+ * Draw the two "Play" | "Synth" mode-toggle buttons in the header bar; the
+ * button matching the active mode is drawn hot.
+ */
+static void draw_mode_buttons(SDL_Renderer *r, app_mode_t mode)
+{
+    assert(r != NULL);
+
+    static const char *const mode_labels[2] = { "Play", "Synth" };
+    static const i32 mode_bw[2] = { MODE_BTN1_W, MODE_BTN2_W };
+    i32 bx = MODE_BTN_X;
+    for (i32 b = 0; b < 2; b++) {
+        bool active = (b == 0) ? (mode == APP_MODE_PLAYER) : (mode == APP_MODE_SYNTH);
+        if (active) { set_col(r, COL_BTN_HOT); } else { set_col(r, COL_BTN); }
+        fill_rect(r, (f32)bx, (f32)MODE_BTN_Y, (f32)mode_bw[b], (f32)MODE_BTN_H);
+        set_col(r, COL_BORDER);
+        outline_rect(r, (f32)bx, (f32)MODE_BTN_Y, (f32)mode_bw[b], (f32)MODE_BTN_H);
+        i32 llen = (i32)SDL_strlen(mode_labels[b]);
+        f32 mlx  = (f32)(bx + (mode_bw[b] - llen * FONT_W) / 2);
+        f32 mly  = (f32)(MODE_BTN_Y + (MODE_BTN_H - FONT_H) / 2);
+        set_col(r, COL_TEXT);
+        (void)SDL_RenderDebugText(r, mlx, mly, mode_labels[b]);
+        bx += mode_bw[b] + MODE_BTN_GAP;
+    }
+}
+
+/*
  * Draw the header bar: dark background, app name, current track title
  * and elapsed / total time.
  */
@@ -400,24 +426,7 @@ static void draw_header(SDL_Renderer *r,
     (void)SDL_RenderDebugText(r, 4.0f, (f32)(HDR_Y + 6), CSPLAYER_APP_NAME);
 
     /* Mode toggle buttons: "Play" | "Synth" */
-    {
-        static const char *const mode_labels[2] = { "Play", "Synth" };
-        static const i32 mode_bw[2] = { MODE_BTN1_W, MODE_BTN2_W };
-        i32 bx = MODE_BTN_X;
-        for (i32 b = 0; b < 2; b++) {
-            bool active = (b == 0) ? (mode == APP_MODE_PLAYER) : (mode == APP_MODE_SYNTH);
-            if (active) { set_col(r, COL_BTN_HOT); } else { set_col(r, COL_BTN); }
-            fill_rect(r, (f32)bx, (f32)MODE_BTN_Y, (f32)mode_bw[b], (f32)MODE_BTN_H);
-            set_col(r, COL_BORDER);
-            outline_rect(r, (f32)bx, (f32)MODE_BTN_Y, (f32)mode_bw[b], (f32)MODE_BTN_H);
-            i32 llen = (i32)SDL_strlen(mode_labels[b]);
-            f32 mlx  = (f32)(bx + (mode_bw[b] - llen * FONT_W) / 2);
-            f32 mly  = (f32)(MODE_BTN_Y + (MODE_BTN_H - FONT_H) / 2);
-            set_col(r, COL_TEXT);
-            (void)SDL_RenderDebugText(r, mlx, mly, mode_labels[b]);
-            bx += mode_bw[b] + MODE_BTN_GAP;
-        }
-    }
+    draw_mode_buttons(r, mode);
 
     /* Compute time string first so we know its pixel width. */
     f32 pos_frac = audio_get_pos(audio);
@@ -444,6 +453,58 @@ static void draw_header(SDL_Renderer *r,
     (void)SDL_RenderDebugText(r, tx, (f32)(HDR_Y + 6), timebuf);
 }
 
+/* dB grid labels for the freq subplot; draws full-width lines at top/bottom. */
+static void draw_freq_db_labels(SDL_Renderer *r, i32 plot_y, i32 plot_h,
+                                 bool at_bottom)
+{
+    assert(r != NULL);
+    assert(plot_h > 0);
+
+    for (i32 t = 0; t < NUM_DB_TICKS; t++) {
+        i32 py = db_to_py_r(db_ticks[t], plot_y, plot_h);
+
+        if (t == 0 || t == NUM_DB_TICKS - 1) {
+            set_col(r, COL_AXIS);
+            (void)SDL_RenderLine(r, (f32)SPEC_X, (f32)py,
+                                    (f32)(SPEC_X + SPEC_W), (f32)py);
+        }
+
+        i32 llen = (i32)SDL_strlen(db_labels[t]);
+        f32 lx   = (f32)(SPEC_X - llen * FONT_W - 2);
+        f32 ly   = (f32)(py - FONT_H / 2);
+        /* In half-height mode the bottom label sits on the split line — push above. */
+        if (!at_bottom && t == NUM_DB_TICKS - 1) { ly = (f32)(py - FONT_H); }
+        if (lx < 0.0f) { lx = 0.0f; }
+        set_col(r, COL_TICK);
+        (void)SDL_RenderDebugText(r, lx, ly, db_labels[t]);
+    }
+}
+
+/* Frequency tick marks (always) + external labels (only at panel bottom). */
+static void draw_freq_ticks(SDL_Renderer *r, i32 plot_y, i32 plot_h,
+                             bool at_bottom)
+{
+    assert(r != NULL);
+    assert(plot_h > 0);
+    assert(NUM_FREQ_TICKS > 0);
+
+    for (i32 t = 0; t < NUM_FREQ_TICKS; t++) {
+        i32 px = freq_to_px(freq_ticks[t]);
+        if (px < 0) { continue; }
+
+        set_col(r, COL_AXIS);
+        (void)SDL_RenderLine(r, (f32)px, (f32)(plot_y + plot_h - 3),
+                                (f32)px, (f32)(plot_y + plot_h));
+
+        if (at_bottom) {
+            i32 llen = (i32)SDL_strlen(freq_labels[t]);
+            f32 lx   = (f32)(px - llen * FONT_W / 2);
+            set_col(r, COL_TICK);
+            (void)SDL_RenderDebugText(r, lx, (f32)(plot_y + plot_h + 4), freq_labels[t]);
+        }
+    }
+}
+
 /*
  * Draw the frequency-domain subplot: panel bg, axis lines, dB labels,
  * Y-axis and X-axis titles, and (only when at the full bottom of the panel)
@@ -453,7 +514,6 @@ static void draw_freq_axes(SDL_Renderer *r, i32 plot_y, i32 plot_h)
 {
     assert(r != NULL);
     assert(plot_h > 0);
-    assert(NUM_FREQ_TICKS > 0);
 
     bool at_bottom = (plot_y + plot_h == SPEC_Y + SPEC_H);
 
@@ -483,42 +543,8 @@ static void draw_freq_axes(SDL_Renderer *r, i32 plot_y, i32 plot_h)
     (void)SDL_RenderLine(r, (f32)(SPEC_X + SPEC_W), (f32)plot_y,
                             (f32)(SPEC_X + SPEC_W), (f32)(plot_y + plot_h));
 
-    /* dB labels + full-width lines at top/bottom edges */
-    for (i32 t = 0; t < NUM_DB_TICKS; t++) {
-        i32 py = db_to_py_r(db_ticks[t], plot_y, plot_h);
-
-        if (t == 0 || t == NUM_DB_TICKS - 1) {
-            set_col(r, COL_AXIS);
-            (void)SDL_RenderLine(r, (f32)SPEC_X, (f32)py,
-                                    (f32)(SPEC_X + SPEC_W), (f32)py);
-        }
-
-        i32 llen = (i32)SDL_strlen(db_labels[t]);
-        f32 lx   = (f32)(SPEC_X - llen * FONT_W - 2);
-        f32 ly   = (f32)(py - FONT_H / 2);
-        /* In half-height mode the bottom label sits on the split line — push above. */
-        if (!at_bottom && t == NUM_DB_TICKS - 1) { ly = (f32)(py - FONT_H); }
-        if (lx < 0.0f) { lx = 0.0f; }
-        set_col(r, COL_TICK);
-        (void)SDL_RenderDebugText(r, lx, ly, db_labels[t]);
-    }
-
-    /* Frequency tick marks — always drawn; labels only at panel bottom. */
-    for (i32 t = 0; t < NUM_FREQ_TICKS; t++) {
-        i32 px = freq_to_px(freq_ticks[t]);
-        if (px < 0) { continue; }
-
-        set_col(r, COL_AXIS);
-        (void)SDL_RenderLine(r, (f32)px, (f32)(plot_y + plot_h - 3),
-                                (f32)px, (f32)(plot_y + plot_h));
-
-        if (at_bottom) {
-            i32 llen = (i32)SDL_strlen(freq_labels[t]);
-            f32 lx   = (f32)(px - llen * FONT_W / 2);
-            set_col(r, COL_TICK);
-            (void)SDL_RenderDebugText(r, lx, (f32)(plot_y + plot_h + 4), freq_labels[t]);
-        }
-    }
+    draw_freq_db_labels(r, plot_y, plot_h, at_bottom);
+    draw_freq_ticks(r, plot_y, plot_h, at_bottom);
 }
 
 /*
@@ -543,6 +569,53 @@ static void draw_time_line(SDL_Renderer *r, const spectrum_t *spectrum)
 
     set_col(r, COL_WAVE);
     (void)SDL_RenderLines(r, spectrum->time_pts, SPEC_W);
+}
+
+/*
+ * Draw the amplitude axis labels +1 / 0 / -1 to the left of a time-domain plot.
+ * Shared by draw_time_axes and draw_band_axes.  In half-height (split) mode the
+ * top label sits on the split line, so it is pushed down to the plot top.
+ */
+static void draw_amp_labels(SDL_Renderer *r, i32 plot_y, i32 plot_h)
+{
+    assert(r != NULL);
+    assert(plot_h > 0);
+
+    for (i32 t = 0; t < NUM_AMP_LABELS; t++) {
+        i32 llen = (i32)SDL_strlen(amp_labels[t]);
+        f32 lx   = (f32)(SPEC_X - llen * FONT_W - 2);
+        f32 ly   = (f32)(plot_y + (i32)(amp_frac[t] * (f32)plot_h) - FONT_H / 2);
+        if (t == 0 && plot_y != SPEC_Y) { ly = (f32)plot_y; }
+        if (lx < 0.0f) { lx = 0.0f; }
+        set_col(r, COL_TICK);
+        (void)SDL_RenderDebugText(r, lx, ly, amp_labels[t]);
+    }
+}
+
+/* Time tick marks every 2 ms; labels on every-4-ms ticks only at panel bottom. */
+static void draw_time_ticks(SDL_Renderer *r, i32 plot_y, i32 plot_h,
+                             bool at_bottom)
+{
+    assert(r != NULL);
+    assert(plot_h > 0);
+
+    for (i32 t = 0; t <= 10; t++) {
+        f32 frac = (f32)t / 10.0f;
+        i32 px   = SPEC_X + (i32)(frac * (f32)(SPEC_W - 1));
+
+        set_col(r, COL_AXIS);
+        (void)SDL_RenderLine(r, (f32)px, (f32)(plot_y + plot_h - 3),
+                                (f32)px, (f32)(plot_y + plot_h));
+
+        if (at_bottom && (t % 2 == 0)) {
+            char lbuf[4];
+            (void)SDL_snprintf(lbuf, sizeof(lbuf), "%d", t * 2);
+            i32 llen = (i32)SDL_strlen(lbuf);
+            f32 lx   = (f32)(px - llen * FONT_W / 2);
+            set_col(r, COL_TICK);
+            (void)SDL_RenderDebugText(r, lx, (f32)(plot_y + plot_h + 4), lbuf);
+        }
+    }
 }
 
 /*
@@ -588,36 +661,8 @@ static void draw_time_axes(SDL_Renderer *r, i32 plot_y, i32 plot_h)
     (void)SDL_RenderLine(r, (f32)SPEC_X, (f32)(plot_y + plot_h / 2),
                             (f32)(SPEC_X + SPEC_W), (f32)(plot_y + plot_h / 2));
 
-    /* Amplitude labels: +1 (top), 0 (middle), -1 (bottom) */
-    for (i32 t = 0; t < NUM_AMP_LABELS; t++) {
-        i32 llen = (i32)SDL_strlen(amp_labels[t]);
-        f32 lx   = (f32)(SPEC_X - llen * FONT_W - 2);
-        f32 ly   = (f32)(plot_y + (i32)(amp_frac[t] * (f32)plot_h) - FONT_H / 2);
-        /* In half-height mode the top label sits on the split line — push below. */
-        if (t == 0 && plot_y != SPEC_Y) { ly = (f32)plot_y; }
-        if (lx < 0.0f) { lx = 0.0f; }
-        set_col(r, COL_TICK);
-        (void)SDL_RenderDebugText(r, lx, ly, amp_labels[t]);
-    }
-
-    /* Time tick marks every 2 ms; labels on every-4-ms ticks only at panel bottom. */
-    for (i32 t = 0; t <= 10; t++) {
-        f32 frac = (f32)t / 10.0f;
-        i32 px   = SPEC_X + (i32)(frac * (f32)(SPEC_W - 1));
-
-        set_col(r, COL_AXIS);
-        (void)SDL_RenderLine(r, (f32)px, (f32)(plot_y + plot_h - 3),
-                                (f32)px, (f32)(plot_y + plot_h));
-
-        if (at_bottom && (t % 2 == 0)) {
-            char lbuf[4];
-            (void)SDL_snprintf(lbuf, sizeof(lbuf), "%d", t * 2);
-            i32 llen = (i32)SDL_strlen(lbuf);
-            f32 lx   = (f32)(px - llen * FONT_W / 2);
-            set_col(r, COL_TICK);
-            (void)SDL_RenderDebugText(r, lx, (f32)(plot_y + plot_h + 4), lbuf);
-        }
-    }
+    draw_amp_labels(r, plot_y, plot_h);
+    draw_time_ticks(r, plot_y, plot_h, at_bottom);
 }
 
 /*
@@ -666,6 +711,58 @@ static void draw_graph_buttons(SDL_Renderer *r, const ui_t *ui)
 }
 
 /*
+ * Draw one band sub-panel (index b in 0..2): left divider, zero midline, band
+ * label, and time tick marks (with external labels when at_bottom).
+ */
+static void draw_band_panel(SDL_Renderer *r, i32 b, i32 plot_y, i32 plot_h,
+                             bool at_bottom)
+{
+    assert(r != NULL);
+    assert(b >= 0 && b < 3);
+    assert(plot_h > 0);
+
+    static const char *const band_labels[3]    = { "Bass", "Mids", "High" };
+    static const i32         band_window_ms[3] = { 50, 10, 5 };
+    i32 bx = SPEC_X + b * BAND_W;
+
+    /* Left border / divider for this sub-panel. */
+    set_col(r, COL_AXIS);
+    (void)SDL_RenderLine(r, (f32)bx, (f32)plot_y,
+                            (f32)bx, (f32)(plot_y + plot_h));
+
+    /* Horizontal zero-amplitude midline. */
+    (void)SDL_RenderLine(r, (f32)bx,            (f32)(plot_y + plot_h / 2),
+                            (f32)(bx + BAND_W), (f32)(plot_y + plot_h / 2));
+
+    /* Band label centred at the top of the sub-panel. */
+    i32 llen = (i32)SDL_strlen(band_labels[b]);
+    f32 lx   = (f32)(bx + (BAND_W - llen * FONT_W) / 2);
+    set_col(r, COL_DIM);
+    (void)SDL_RenderDebugText(r, lx, (f32)(plot_y + 2), band_labels[b]);
+
+    /* Time tick marks at 0, 10, 20 ms; labels below the panel when at_bottom.
+     * At internal dividers the "20" of one panel and the "0" of the next share
+     * the same x — right-justify "20" and left-justify "0" to keep them clear. */
+    for (i32 t = 0; t <= 2; t++) {
+        i32 px = bx + t * (BAND_W - 1) / 2;
+        set_col(r, COL_AXIS);
+        (void)SDL_RenderLine(r, (f32)px, (f32)(plot_y + plot_h - 3),
+                                (f32)px, (f32)(plot_y + plot_h));
+        if (at_bottom) {
+            char lbuf[4];
+            (void)SDL_snprintf(lbuf, sizeof(lbuf), "%d", t * band_window_ms[b] / 2);
+            i32 llen2 = (i32)SDL_strlen(lbuf);
+            f32 lx2;
+            if      (t == 2 && b < 2) { lx2 = (f32)(px - llen2 * FONT_W - 2); }
+            else if (t == 0 && b > 0) { lx2 = (f32)(px + 2); }
+            else                      { lx2 = (f32)(px - llen2 * FONT_W / 2); }
+            set_col(r, COL_TICK);
+            (void)SDL_RenderDebugText(r, lx2, (f32)(plot_y + plot_h + 4), lbuf);
+        }
+    }
+}
+
+/*
  * Draw axes for three side-by-side band sub-panels within the time-domain rect.
  * Each BAND_W-wide panel has a left border, horizontal midline, and a label.
  */
@@ -675,8 +772,6 @@ static void draw_band_axes(SDL_Renderer *r, i32 plot_y, i32 plot_h)
     assert(plot_h >  0);
     assert(BAND_W >  0);
 
-    static const char *const band_labels[3]  = { "Bass", "Mids", "High" };
-    static const i32         band_window_ms[3] = { 50, 10, 5 };
     bool at_bottom = (plot_y + plot_h == SPEC_Y + SPEC_H);
 
     set_col(r, COL_PANEL);
@@ -690,54 +785,10 @@ static void draw_band_axes(SDL_Renderer *r, i32 plot_y, i32 plot_h)
                             (f32)(SPEC_X + SPEC_W), (f32)(plot_y + plot_h));
 
     /* Amplitude labels: +1 (top), 0 (middle), -1 (bottom) — left of first panel. */
-    for (i32 t = 0; t < NUM_AMP_LABELS; t++) {
-        i32 llen = (i32)SDL_strlen(amp_labels[t]);
-        f32 lx   = (f32)(SPEC_X - llen * FONT_W - 2);
-        f32 ly   = (f32)(plot_y + (i32)(amp_frac[t] * (f32)plot_h) - FONT_H / 2);
-        if (t == 0 && plot_y != SPEC_Y) { ly = (f32)plot_y; }
-        if (lx < 0.0f) { lx = 0.0f; }
-        set_col(r, COL_TICK);
-        (void)SDL_RenderDebugText(r, lx, ly, amp_labels[t]);
-    }
+    draw_amp_labels(r, plot_y, plot_h);
 
     for (i32 b = 0; b < 3; b++) {
-        i32 bx = SPEC_X + b * BAND_W;
-
-        /* Left border / divider for this sub-panel. */
-        set_col(r, COL_AXIS);
-        (void)SDL_RenderLine(r, (f32)bx, (f32)plot_y,
-                                (f32)bx, (f32)(plot_y + plot_h));
-
-        /* Horizontal zero-amplitude midline. */
-        (void)SDL_RenderLine(r, (f32)bx,            (f32)(plot_y + plot_h / 2),
-                                (f32)(bx + BAND_W), (f32)(plot_y + plot_h / 2));
-
-        /* Band label centred at the top of the sub-panel. */
-        i32 llen = (i32)SDL_strlen(band_labels[b]);
-        f32 lx   = (f32)(bx + (BAND_W - llen * FONT_W) / 2);
-        set_col(r, COL_DIM);
-        (void)SDL_RenderDebugText(r, lx, (f32)(plot_y + 2), band_labels[b]);
-
-        /* Time tick marks at 0, 10, 20 ms; labels below the panel when at_bottom.
-         * At internal dividers the "20" of one panel and the "0" of the next share
-         * the same x — right-justify "20" and left-justify "0" to keep them clear. */
-        for (i32 t = 0; t <= 2; t++) {
-            i32 px = bx + t * (BAND_W - 1) / 2;
-            set_col(r, COL_AXIS);
-            (void)SDL_RenderLine(r, (f32)px, (f32)(plot_y + plot_h - 3),
-                                    (f32)px, (f32)(plot_y + plot_h));
-            if (at_bottom) {
-                char lbuf[4];
-                (void)SDL_snprintf(lbuf, sizeof(lbuf), "%d", t * band_window_ms[b] / 2);
-                i32 llen2 = (i32)SDL_strlen(lbuf);
-                f32 lx2;
-                if      (t == 2 && b < 2) { lx2 = (f32)(px - llen2 * FONT_W - 2); }
-                else if (t == 0 && b > 0) { lx2 = (f32)(px + 2); }
-                else                      { lx2 = (f32)(px - llen2 * FONT_W / 2); }
-                set_col(r, COL_TICK);
-                (void)SDL_RenderDebugText(r, lx2, (f32)(plot_y + plot_h + 4), lbuf);
-            }
-        }
+        draw_band_panel(r, b, plot_y, plot_h, at_bottom);
     }
 
     /* Right border. */
@@ -1470,6 +1521,43 @@ static ui_action_t mouse_down_player(ui_t *ui, f32 lx, f32 ly, playlist_t *pl)
     return UI_ACTION_NONE;
 }
 
+/*
+ * Hit-test the top toolbar clusters shared by both app modes: the "Deconstruct"
+ * toggle, graph-mode buttons, the Play/Synth mode toggle, and the transport
+ * buttons.  Returns the triggered action, or UI_ACTION_NONE if no toolbar
+ * control was hit (the caller then checks the volume/seek/panel regions).
+ */
+static ui_action_t mouse_down_toolbar(ui_t *ui, f32 lx, f32 ly, app_mode_t mode)
+{
+    assert(ui != NULL);
+
+    /* "Deconstruct" toggle — only visible when time-domain is shown. */
+    if (ui->graph_mode != GRAPH_MODE_FREQ && in_decomp_btn(lx, ly)) {
+        ui->wave_decompose = !ui->wave_decompose;
+        return UI_ACTION_WAVE_DECOMPOSE;
+    }
+
+    /* Graph mode toggle buttons — active in both app modes, checked first. */
+    for (i32 b = 0; b < (i32)GRAPH_MODE_COUNT; b++) {
+        if (in_graph_btn(lx, ly, b)) {
+            ui->graph_mode = (graph_mode_t)b;
+            return UI_ACTION_GRAPH_MODE;
+        }
+    }
+
+    /* Mode toggle — no-op when clicking the already-active mode. */
+    i32 mb = which_mode_btn(lx, ly);
+    if (mb == 0 && mode != APP_MODE_PLAYER) { return UI_ACTION_MODE_TOGGLE; }
+    if (mb == 1 && mode != APP_MODE_SYNTH)  { return UI_ACTION_MODE_TOGGLE; }
+
+    /* Transport buttons — active in both modes. */
+    if (in_button(0, lx, ly)) { return UI_ACTION_REWIND;     }
+    if (in_button(1, lx, ly)) { return UI_ACTION_PLAY_PAUSE; }
+    if (in_button(2, lx, ly)) { return UI_ACTION_NEXT;       }
+
+    return UI_ACTION_NONE;
+}
+
 ui_action_t ui_on_mouse_down(ui_t *ui, const SDL_MouseButtonEvent *e,
                               const audio_t *audio, playlist_t *pl,
                               app_mode_t mode)
@@ -1490,31 +1578,8 @@ ui_action_t ui_on_mouse_down(ui_t *ui, const SDL_MouseButtonEvent *e,
         return mouse_down_synth(ui, lx, ly);
     }
 
-    /* "Deconstruct" toggle — only visible when time-domain is shown. */
-    if (ui->graph_mode != GRAPH_MODE_FREQ && in_decomp_btn(lx, ly)) {
-        ui->wave_decompose = !ui->wave_decompose;
-        return UI_ACTION_WAVE_DECOMPOSE;
-    }
-
-    /* Graph mode toggle buttons — active in both app modes, checked first. */
-    for (i32 b = 0; b < (i32)GRAPH_MODE_COUNT; b++) {
-        if (in_graph_btn(lx, ly, b)) {
-            ui->graph_mode = (graph_mode_t)b;
-            return UI_ACTION_GRAPH_MODE;
-        }
-    }
-
-    /* Mode toggle — no-op when clicking the already-active mode. */
-    {
-        i32 mb = which_mode_btn(lx, ly);
-        if (mb == 0 && mode != APP_MODE_PLAYER) { return UI_ACTION_MODE_TOGGLE; }
-        if (mb == 1 && mode != APP_MODE_SYNTH)  { return UI_ACTION_MODE_TOGGLE; }
-    }
-
-    /* Transport buttons — active in both modes. */
-    if (in_button(0, lx, ly)) { return UI_ACTION_REWIND;     }
-    if (in_button(1, lx, ly)) { return UI_ACTION_PLAY_PAUSE; }
-    if (in_button(2, lx, ly)) { return UI_ACTION_NEXT;       }
+    ui_action_t toolbar = mouse_down_toolbar(ui, lx, ly, mode);
+    if (toolbar != UI_ACTION_NONE) { return toolbar; }
 
     /* Volume and seek bar — active in both modes. */
     if (in_vol_slider(lx, ly)) {
@@ -1690,6 +1755,21 @@ ui_action_t ui_on_key(ui_t *ui, const SDL_KeyboardEvent *e, app_mode_t mode)
     return UI_ACTION_NONE;
 }
 
+/*
+ * Convert a mouse-wheel delta into whole discrete scroll steps, carrying the
+ * sub-step remainder in ui->scroll_accum.  A wheel notch (dy = ±1) yields
+ * exactly ±1 step; a trackpad's small fractional deltas accumulate across
+ * events instead of truncating to zero, and a fast flick steps proportionally.
+ */
+static i32 scroll_steps(ui_t *ui, f32 dy)
+{
+    assert(ui != NULL);
+    ui->scroll_accum += dy;
+    i32 steps = (i32)ui->scroll_accum;   /* truncates toward zero */
+    ui->scroll_accum -= (f32)steps;
+    return steps;
+}
+
 ui_action_t ui_on_scroll(ui_t *ui, f32 lx, f32 ly, f32 dy,
                           f32 current_seek_pos, playlist_t *pl,
                           app_mode_t mode)
@@ -1716,16 +1796,20 @@ ui_action_t ui_on_scroll(ui_t *ui, f32 lx, f32 ly, f32 dy,
         if (ui->synth_inst_open || ui->synth_note_open) {
             i32 item_count = ui->synth_inst_open ? SYNTH_INSTRUMENTS : SYNTH_NOTES;
             i32 max_scroll = item_count - DD_ROWS_VISIBLE;
-            ui->synth_dd_scroll -= (i32)dy;
+            ui->synth_dd_scroll -= scroll_steps(ui, dy);
             if (ui->synth_dd_scroll < 0)           { ui->synth_dd_scroll = 0; }
             if (ui->synth_dd_scroll > max_scroll)  { ui->synth_dd_scroll = max_scroll; }
             return UI_ACTION_NONE;
         }
         if (in_synth_inst_row(lx, ly)) {
-            return (dy > 0.0f) ? UI_ACTION_SYNTH_INST_UP : UI_ACTION_SYNTH_INST_DOWN;
+            i32 steps = scroll_steps(ui, dy);
+            if (steps == 0) { return UI_ACTION_NONE; }
+            return (steps > 0) ? UI_ACTION_SYNTH_INST_UP : UI_ACTION_SYNTH_INST_DOWN;
         }
         if (in_synth_note_row(lx, ly)) {
-            return (dy > 0.0f) ? UI_ACTION_SYNTH_NOTE_UP : UI_ACTION_SYNTH_NOTE_DOWN;
+            i32 steps = scroll_steps(ui, dy);
+            if (steps == 0) { return UI_ACTION_NONE; }
+            return (steps > 0) ? UI_ACTION_SYNTH_NOTE_UP : UI_ACTION_SYNTH_NOTE_DOWN;
         }
         return UI_ACTION_NONE;
     }
@@ -1735,7 +1819,7 @@ ui_action_t ui_on_scroll(ui_t *ui, f32 lx, f32 ly, f32 dy,
         i32 vis        = PL_H / PL_ROW;
         i32 max_scroll = pl->count - vis;
         if (max_scroll > 0) {
-            pl->scroll -= (i32)dy;
+            pl->scroll -= scroll_steps(ui, dy);
             if (pl->scroll < 0)          { pl->scroll = 0; }
             if (pl->scroll > max_scroll) { pl->scroll = max_scroll; }
         }
