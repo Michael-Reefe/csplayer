@@ -158,7 +158,7 @@ typedef enum {
  * merely uneven by a pixel, never misaligned. */
 #define SPECGRAM_ROWS      (SPEC_H / 2)   /* ring rows (2 logical px per row) */
 #define SPECGRAM_COLS      (SPEC_W / 2)   /* columns (~2 logical px per col)  */
-#define SPECGRAM_WINDOW_S  5.0f      /* seconds of history spanning the plot */
+#define SPECGRAM_WINDOW_S  2.0f * ((f32)SPECGRAM_ROWS / (f32)TARGET_FPS)      /* seconds of history spanning the plot */
 #define SPECGRAM_ROW_S     (SPECGRAM_WINDOW_S / (f32)SPECGRAM_ROWS)
 /* "Spectrogram" toggle: bottom-left interior of the freq subplot.  The y
  * coordinate is computed at runtime (the freq plot rect differs between
