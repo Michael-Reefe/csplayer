@@ -31,6 +31,7 @@ bool g_mock_MIX_GetTrackPlaybackPosition_neg     = false;
 bool g_mock_MIX_GetTrackPlaybackPosition_over    = false;
 bool g_mock_TTF_RenderText_Solid_fail            = false;
 bool g_mock_SDL_CreateTextureFromSurface_fail    = false;
+bool g_mock_SDL_CreateTexture_fail               = false;
 bool g_mock_MIX_LoadRawAudioNoCopy_fail          = false;
 bool g_mock_MIX_SetTrackRawCallback_fail         = false;
 
@@ -178,6 +179,18 @@ SDL_Texture *csp_mock_SDL_CreateTextureFromSurface(SDL_Renderer *renderer,
         return NULL;
     }
     return SDL_CreateTextureFromSurface(renderer, surface);
+}
+
+SDL_Texture *csp_mock_SDL_CreateTexture(SDL_Renderer *renderer,
+                                         SDL_PixelFormat format,
+                                         SDL_TextureAccess access,
+                                         int w, int h)
+{
+    if (g_mock_SDL_CreateTexture_fail) {
+        g_mock_SDL_CreateTexture_fail = false;
+        return NULL;
+    }
+    return SDL_CreateTexture(renderer, format, access, w, h);
 }
 
 MIX_Audio *csp_mock_MIX_LoadRawAudioNoCopy(MIX_Mixer *mixer, const void *data,

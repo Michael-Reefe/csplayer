@@ -1761,6 +1761,142 @@ static void test_ui_draw_both_synth(void)
 
 /* ── Suite ───────────────────────────────────────────────────────────────── */
 
+/* ── Spectrogram toggle + draw tests ─────────────────────────────────────── */
+
+static void test_ui_specgram_btn_freq(void)
+{
+    TEST_BEGIN("ui_specgram_btn_freq");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    /* FREQ mode: button at the bottom-left of the full panel. */
+    SDL_MouseButtonEvent e =
+        make_btn((f32)(SPECGRAM_BTN_X + 4),
+                 (f32)(SPEC_Y + SPEC_H - GRAPH_BTN_H - 2 + 4), SDL_BUTTON_LEFT);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+    CHECK(act == UI_ACTION_SPECGRAM);
+    CHECK(ui.specgram_on);
+    act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+    CHECK(act == UI_ACTION_SPECGRAM);
+    CHECK(!ui.specgram_on);
+    TEST_END();
+}
+
+static void test_ui_specgram_btn_both(void)
+{
+    TEST_BEGIN("ui_specgram_btn_both");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.graph_mode = GRAPH_MODE_BOTH;
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    /* BOTH mode: the button sits at the bottom of the top-half freq subplot. */
+    SDL_MouseButtonEvent e =
+        make_btn((f32)(SPECGRAM_BTN_X + 4),
+                 (f32)(SPEC_Y + SPEC_H / 2 - GRAPH_BTN_H - 2 + 4),
+                 SDL_BUTTON_LEFT);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+    CHECK(act == UI_ACTION_SPECGRAM);
+    CHECK(ui.specgram_on);
+    /* The panel-bottom slot belongs to Deconstruct in BOTH mode. */
+    SDL_MouseButtonEvent e2 =
+        make_btn((f32)(SPECGRAM_BTN_X + 4),
+                 (f32)(SPEC_Y + SPEC_H - GRAPH_BTN_H - 2 + 4), SDL_BUTTON_LEFT);
+    act = ui_on_mouse_down(&ui, &e2, &a, &pl, APP_MODE_PLAYER);
+    CHECK(act == UI_ACTION_WAVE_DECOMPOSE);
+    CHECK(ui.specgram_on);   /* untouched by the Deconstruct click */
+    TEST_END();
+}
+
+static void test_ui_specgram_btn_time_mode(void)
+{
+    TEST_BEGIN("ui_specgram_btn_time_mode");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.graph_mode = GRAPH_MODE_TIME;
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    /* TIME mode hides the spectrogram button; its BOTH-mode spot is empty. */
+    SDL_MouseButtonEvent e =
+        make_btn((f32)(SPECGRAM_BTN_X + 4),
+                 (f32)(SPEC_Y + SPEC_H / 2 - GRAPH_BTN_H - 2 + 4),
+                 SDL_BUTTON_LEFT);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+    CHECK(act == UI_ACTION_NONE);
+    CHECK(!ui.specgram_on);
+    TEST_END();
+}
+
+static void test_ui_key_specgram_toggle(void)
+{
+    TEST_BEGIN("ui_key_specgram_toggle");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    SDL_KeyboardEvent e = make_key(SDL_SCANCODE_G);
+    CHECK(ui_on_key(&ui, &e, APP_MODE_PLAYER) == UI_ACTION_SPECGRAM);
+    CHECK(ui.specgram_on);
+    CHECK(ui_on_key(&ui, &e, APP_MODE_PLAYER) == UI_ACTION_SPECGRAM);
+    CHECK(!ui.specgram_on);
+    TEST_END();
+}
+
+static void test_ui_draw_specgram_freq(void)
+{
+    TEST_BEGIN("ui_draw_specgram_freq");
+    audio_t a    = make_draw_audio(AUDIO_STATUS_PLAYING);
+    spectrum_t s = make_flat_spectrum();
+    playlist_t pl = make_pl(0, -1);
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.specgram_on = true;
+    /* Mid-ring head with a few dirty rows: exercises lazy texture creation,
+     * the dirty upload loop, and both render pieces. */
+    s.sg_head  = SPECGRAM_ROWS / 2;
+    s.sg_dirty = 3;
+    s.sg_amp[s.sg_head][0] = 255;
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    CHECK(ui.specgram_tex != NULL);
+    CHECK(s.sg_dirty == 0);
+    /* Second draw: nothing dirty, head at 0 → single-piece render path. */
+    s.sg_head = 0;
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    CHECK(s.sg_dirty == 0);
+    SDL_DestroyTexture(ui.specgram_tex);   /* test-local ui_t owns it */
+    TEST_END();
+}
+
+static void test_ui_draw_specgram_both(void)
+{
+    TEST_BEGIN("ui_draw_specgram_both");
+    audio_t a    = make_draw_audio(AUDIO_STATUS_PLAYING);
+    spectrum_t s = make_flat_spectrum();
+    playlist_t pl = make_pl(0, -1);
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.specgram_on = true;
+    ui.graph_mode  = GRAPH_MODE_BOTH;
+    s.sg_head  = 1;                  /* two pieces, minimal second piece */
+    s.sg_dirty = SPECGRAM_ROWS;      /* full re-upload path (post-clear)  */
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    CHECK(ui.specgram_tex != NULL);
+    CHECK(s.sg_dirty == 0);
+    SDL_DestroyTexture(ui.specgram_tex);
+    TEST_END();
+}
+
+static void test_ui_draw_specgram_create_fail(void)
+{
+    TEST_BEGIN("ui_draw_specgram_create_fail");
+    audio_t a    = make_draw_audio(AUDIO_STATUS_STOPPED);
+    spectrum_t s = make_flat_spectrum();
+    playlist_t pl = make_pl(0, -1);
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.specgram_on = true;
+    s.sg_dirty = 1;
+    /* Texture creation fails → draw skips; dirty state stays unconsumed so
+     * the upload retries once a texture exists. */
+    g_mock_SDL_CreateTexture_fail = true;
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    CHECK(ui.specgram_tex == NULL);
+    CHECK(s.sg_dirty == 1);
+    TEST_END();
+}
+
 void run_ui_tests(void)
 {
     /* Create an offscreen window + software renderer for draw smoke tests. */
@@ -1865,6 +2001,10 @@ void run_ui_tests(void)
     test_ui_scroll_playlist_trackpad();
     test_ui_scroll_synth_row_trackpad();
     test_ui_scroll_none();
+    test_ui_specgram_btn_freq();
+    test_ui_specgram_btn_both();
+    test_ui_specgram_btn_time_mode();
+    test_ui_key_specgram_toggle();
 
     /* ── Draw smoke tests (require renderer) ── */
     if (g_renderer != NULL) {
@@ -1907,6 +2047,9 @@ void run_ui_tests(void)
         test_ui_draw_time_synth();
         test_ui_draw_both_player();
         test_ui_draw_both_synth();
+        test_ui_draw_specgram_freq();
+        test_ui_draw_specgram_both();
+        test_ui_draw_specgram_create_fail();
     }
 
     TTF_Quit();

@@ -35,7 +35,7 @@ typedef  double complex c64;
 
 /* ── Application metadata ────────────────────────────────────────────────── */
 #define CSPLAYER_APP_NAME    "csplayer"
-#define CSPLAYER_APP_VERSION "0.3.1"
+#define CSPLAYER_APP_VERSION "0.4.0"
 #define CSPLAYER_APP_ID      "com.csplayer.csplayer"
 #define CSPLAYER_ORG         "csplayer"
 
@@ -143,6 +143,45 @@ typedef enum {
 #define GRAPH_BTN_W    38   /* logical px per button (fits 4-char label + padding) */
 #define GRAPH_BTN_H    10   /* logical px per button height                        */
 #define GRAPH_BTN_GAP   2   /* gap between adjacent buttons                        */
+
+/* ── Scrolling spectrogram (waterfall) ──────────────────────────────────────
+ * Ring buffer of amplitude rows behind the frequency plot: X = log frequency
+ * (same LUT as the spectrum line), Y = recent time — the top row is "now" and
+ * the image slides downward, oldest rows leaving through the plot bottom.
+ *
+ * SPECGRAM_ROWS and SPECGRAM_COLS are free knobs: everything else (cell size,
+ * frequency-bucket mapping, texture size, upload buffers, row period) derives
+ * from them, so they can be changed independently.  Each cell renders as a
+ * block of (SPEC_H/ROWS × SPEC_W/COLS) logical px with NEAREST scaling.
+ * Crispest results when SPECGRAM_ROWS divides SPEC_H — and SPEC_H/2 for Both
+ * mode — evenly (divisors of 96: 96, 48, 32, 24, …); otherwise blocks are
+ * merely uneven by a pixel, never misaligned. */
+#define SPECGRAM_ROWS      (SPEC_H / 2)   /* ring rows (2 logical px per row) */
+#define SPECGRAM_COLS      (SPEC_W / 2)   /* columns (~2 logical px per col)  */
+#define SPECGRAM_WINDOW_S  5.0f      /* seconds of history spanning the plot */
+#define SPECGRAM_ROW_S     (SPECGRAM_WINDOW_S / (f32)SPECGRAM_ROWS)
+/* "Spectrogram" toggle: bottom-left interior of the freq subplot.  The y
+ * coordinate is computed at runtime (the freq plot rect differs between
+ * Spec and Both modes); x matches the Deconstruct button column. */
+#define SPECGRAM_BTN_X     (SPEC_X + 2)
+#define SPECGRAM_BTN_W     96   /* "Spectrogram" = 11 chars × 8 px + padding */
+/* Amplitude color ramp (contrasts the blue spectrum line drawn on top):
+ * deep purple at low amplitude → hot pink at full scale.  Alpha rises as t²
+ * so quiet content fades into the panel background. */
+#define SPECGRAM_COL_LO    60,  10,  70   /* R, G, B at amplitude 0 */
+#define SPECGRAM_COL_HI   255,  60, 200   /* R, G, B at amplitude 1 */
+/* Cells at or above SPECGRAM_HOT_DB *within the newest SPECGRAM_HOT_ROWS
+ * rows* render in the flat bright "hot" colour with LINEAR alpha, so the
+ * most prominent frequencies flash yellow at the top of the waterfall and
+ * settle into the normal pink ramp as they scroll down. */
+#define SPECGRAM_HOT_DB    (-45.0f)       /* dBFS threshold for hot cells */
+#define SPECGRAM_HOT_ROWS  0              /* newest rows eligible for hot */
+#define SPECGRAM_COL_HOT  255, 255, 180   /* R, G, B of hot cells         */
+/* Blank rows inserted into the waterfall when the user jumps the timeline,
+ * marking the discontinuity.  Seeks arriving within the cooldown of the last
+ * break (e.g. a scrub drag) coalesce into a single break. */
+#define SPECGRAM_BREAK_ROWS         3
+#define SPECGRAM_BREAK_COOLDOWN_NS  400000000ULL   /* 0.4 s */
 
 /* ── Synthesizer ─────────────────────────────────────────────────────────── */
 #define SYNTH_SAMPLE_RATE  44100

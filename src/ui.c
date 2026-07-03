@@ -627,8 +627,43 @@ static void draw_time_axes(SDL_Renderer *r, i32 plot_y, i32 plot_h)
 }
 
 /*
+ * Draw a wide toggle button (Deconstruct / Spectrogram): filled box, border,
+ * and a centred label.  hot selects the active colour.
+ */
+static void draw_toggle_btn(SDL_Renderer *r, i32 bx, i32 by, i32 bw,
+                             bool hot, const char *label)
+{
+    assert(r     != NULL);
+    assert(label != NULL);
+    assert(bw > 0 && GRAPH_BTN_H > 0);
+
+    if (hot) { set_col(r, COL_BTN_HOT); } else { set_col(r, COL_BTN); }
+    fill_rect(r, (f32)bx, (f32)by, (f32)bw, (f32)GRAPH_BTN_H);
+    set_col(r, COL_BORDER);
+    outline_rect(r, (f32)bx, (f32)by, (f32)bw, (f32)GRAPH_BTN_H);
+
+    i32 llen = (i32)SDL_strlen(label);
+    f32 lx   = (f32)(bx + (bw - llen * FONT_W) / 2);
+    f32 ly   = (f32)(by + (GRAPH_BTN_H - FONT_H) / 2);
+    set_col(r, COL_TEXT);
+    (void)SDL_RenderDebugText(r, lx, ly, label);
+}
+
+/*
+ * Y coordinate of the "Spectrogram" toggle: bottom-left interior of the freq
+ * subplot, which is the full panel in Spec mode and the top half in Both mode.
+ */
+static i32 specgram_btn_y(graph_mode_t mode)
+{
+    assert(GRAPH_BTN_H > 0);
+    i32 fh = (mode == GRAPH_MODE_BOTH) ? SPEC_H / 2 : SPEC_H;
+    return SPEC_Y + fh - GRAPH_BTN_H - 2;
+}
+
+/*
  * Draw the three graph-mode toggle buttons in the top-right interior of the
- * spectrum panel.  The button matching ui->graph_mode is drawn hot.
+ * spectrum panel, plus the Deconstruct / Spectrogram toggles when their plot
+ * areas are visible.  Buttons matching the active state are drawn hot.
  */
 static void draw_graph_buttons(SDL_Renderer *r, const ui_t *ui)
 {
@@ -658,16 +693,14 @@ static void draw_graph_buttons(SDL_Renderer *r, const ui_t *ui)
 
     /* "Deconstruct" toggle: bottom-left of the panel, only when time-domain is visible. */
     if (ui->graph_mode != GRAPH_MODE_FREQ) {
-        if (ui->wave_decompose) { set_col(r, COL_BTN_HOT); } else { set_col(r, COL_BTN); }
-        fill_rect(r, (f32)DECOMP_BTN_X, (f32)DECOMP_BTN_Y,
-                     (f32)DECOMP_BTN_W,  (f32)GRAPH_BTN_H);
-        set_col(r, COL_BORDER);
-        outline_rect(r, (f32)DECOMP_BTN_X, (f32)DECOMP_BTN_Y,
-                        (f32)DECOMP_BTN_W,  (f32)GRAPH_BTN_H);
-        f32 blx = (f32)(DECOMP_BTN_X + (DECOMP_BTN_W - 11 * FONT_W) / 2);
-        f32 bly = (f32)(DECOMP_BTN_Y + (GRAPH_BTN_H - FONT_H) / 2);
-        set_col(r, COL_TEXT);
-        (void)SDL_RenderDebugText(r, blx, bly, "Deconstruct");
+        draw_toggle_btn(r, DECOMP_BTN_X, DECOMP_BTN_Y, DECOMP_BTN_W,
+                        ui->wave_decompose, "Deconstruct");
+    }
+
+    /* "Spectrogram" toggle: bottom-left of the freq subplot, when visible. */
+    if (ui->graph_mode != GRAPH_MODE_TIME) {
+        draw_toggle_btn(r, SPECGRAM_BTN_X, specgram_btn_y(ui->graph_mode),
+                        SPECGRAM_BTN_W, ui->specgram_on, "Spectrogram");
     }
 }
 
@@ -785,11 +818,66 @@ static void draw_band_lines(SDL_Renderer *r, const spectrum_t *spectrum)
 }
 
 /*
- * Top-level graph panel dispatcher.  Draws the correct subplot layout based
- * on ui->graph_mode, then overlays the mode toggle buttons.
+ * Draw the scrolling spectrogram behind the spectrum line.  The ring texture
+ * is created once on first use (documented Rule 3 exception, like the header
+ * title cache; on failure it is retried next frame).  Dirty rows are uploaded,
+ * then the ring renders as two contiguous pieces — rows [head..ROWS-1] on top
+ * (newest first), rows [0..head-1] below — so the image slides downward as the
+ * head advances.
  */
-static void draw_graph(SDL_Renderer *r, const spectrum_t *spectrum,
-                        const ui_t *ui)
+static void draw_specgram(SDL_Renderer *r, spectrum_t *sp, ui_t *ui,
+                           i32 plot_y, i32 plot_h)
+{
+    assert(r  != NULL);
+    assert(sp != NULL);
+    assert(ui != NULL);
+    assert(plot_h > 0);
+    assert(sp->sg_head >= 0 && sp->sg_head < SPECGRAM_ROWS);
+    assert(sp->sg_dirty >= 0 && sp->sg_dirty <= SPECGRAM_ROWS);
+
+    if (ui->specgram_tex == NULL) {
+        ui->specgram_tex = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32,
+                                             SDL_TEXTUREACCESS_STATIC,
+                                             SPECGRAM_COLS, SPECGRAM_ROWS);
+        if (ui->specgram_tex == NULL) { return; }
+        (void)SDL_SetTextureBlendMode(ui->specgram_tex, SDL_BLENDMODE_BLEND);
+        /* NEAREST keeps the half-resolution cells as crisp 2×2 blocks; the
+         * scale factor is an exact integer in both modes (2:1 in Spec, 1:1
+         * in Both), so no ring row is ever skipped. */
+        (void)SDL_SetTextureScaleMode(ui->specgram_tex, SDL_SCALEMODE_NEAREST);
+    }
+
+    /* Upload rows changed since the last draw: the dirty run starts at the
+     * head (newest) and extends toward older rows, wrapping. */
+    for (i32 i = 0; i < sp->sg_dirty; i++) {
+        i32 row = (sp->sg_head + i) % SPECGRAM_ROWS;
+        spectrum_specgram_pixels(sp, row, ui->specgram_px);
+        SDL_Rect rect = { 0, row, SPECGRAM_COLS, 1 };
+        (void)SDL_UpdateTexture(ui->specgram_tex, &rect, ui->specgram_px,
+                                SPECGRAM_COLS * 4);
+    }
+    spectrum_specgram_clear_dirty(sp);
+
+    /* Two-piece render (this texture is logical-sized — no DISPLAY_SCALE). */
+    f32 sy = (f32)plot_h / (f32)SPECGRAM_ROWS;
+    i32 h1 = SPECGRAM_ROWS - sp->sg_head;
+    SDL_FRect src1 = { 0.0f, (f32)sp->sg_head, (f32)SPECGRAM_COLS, (f32)h1 };
+    SDL_FRect dst1 = { (f32)SPEC_X, (f32)plot_y, (f32)SPEC_W, (f32)h1 * sy };
+    (void)SDL_RenderTexture(r, ui->specgram_tex, &src1, &dst1);
+    if (sp->sg_head > 0) {
+        SDL_FRect src2 = { 0.0f, 0.0f, (f32)SPECGRAM_COLS, (f32)sp->sg_head };
+        SDL_FRect dst2 = { (f32)SPEC_X, (f32)plot_y + (f32)h1 * sy,
+                           (f32)SPEC_W, (f32)sp->sg_head * sy };
+        (void)SDL_RenderTexture(r, ui->specgram_tex, &src2, &dst2);
+    }
+}
+
+/*
+ * Top-level graph panel dispatcher.  Draws the correct subplot layout based
+ * on ui->graph_mode, then overlays the mode toggle buttons.  The spectrogram
+ * (when enabled) sits between the freq axes and the spectrum line.
+ */
+static void draw_graph(SDL_Renderer *r, spectrum_t *spectrum, ui_t *ui)
 {
     assert(r        != NULL);
     assert(spectrum != NULL);
@@ -799,6 +887,7 @@ static void draw_graph(SDL_Renderer *r, const spectrum_t *spectrum,
     switch (ui->graph_mode) {
     case GRAPH_MODE_FREQ:
         draw_freq_axes(r, SPEC_Y, SPEC_H);
+        if (ui->specgram_on) { draw_specgram(r, spectrum, ui, SPEC_Y, SPEC_H); }
         draw_spectrum_line(r, spectrum);
         break;
     case GRAPH_MODE_TIME:
@@ -813,6 +902,7 @@ static void draw_graph(SDL_Renderer *r, const spectrum_t *spectrum,
     case GRAPH_MODE_BOTH: {
         i32 half = SPEC_H / 2;
         draw_freq_axes(r, SPEC_Y, half);
+        if (ui->specgram_on) { draw_specgram(r, spectrum, ui, SPEC_Y, half); }
         draw_spectrum_line(r, spectrum);
         if (ui->wave_decompose) {
             draw_band_axes(r, SPEC_Y + half, half);
@@ -1260,7 +1350,7 @@ static void draw_synth_dropdowns(SDL_Renderer *r, ui_t *ui)
 
 void ui_draw(SDL_Renderer       *r,
              const audio_t      *audio,
-             const spectrum_t   *spectrum,
+             spectrum_t         *spectrum,
              const playlist_t   *playlist,
              ui_t               *ui,
              app_mode_t          mode,
@@ -1413,6 +1503,17 @@ static bool in_decomp_btn(f32 lx, f32 ly)
             ly >= (f32)DECOMP_BTN_Y && ly < (f32)(DECOMP_BTN_Y + GRAPH_BTN_H));
 }
 
+/* Hit-test the "Spectrogram" toggle (its y depends on the graph mode). */
+static bool in_specgram_btn(f32 lx, f32 ly, graph_mode_t mode)
+{
+    assert(SPECGRAM_BTN_W > 0);
+    assert(GRAPH_BTN_H    > 0);
+    i32 by = specgram_btn_y(mode);
+    return (lx >= (f32)SPECGRAM_BTN_X &&
+            lx <  (f32)(SPECGRAM_BTN_X + SPECGRAM_BTN_W) &&
+            ly >= (f32)by && ly < (f32)(by + GRAPH_BTN_H));
+}
+
 static bool in_synth_inst_row(f32 lx, f32 ly)
 {
     assert(PL_Y >= 0);
@@ -1540,6 +1641,13 @@ static ui_action_t mouse_down_toolbar(ui_t *ui, f32 lx, f32 ly, app_mode_t mode)
     if (ui->graph_mode != GRAPH_MODE_FREQ && in_decomp_btn(lx, ly)) {
         ui->wave_decompose = !ui->wave_decompose;
         return UI_ACTION_WAVE_DECOMPOSE;
+    }
+
+    /* "Spectrogram" toggle — only visible when the freq plot is shown. */
+    if (ui->graph_mode != GRAPH_MODE_TIME &&
+        in_specgram_btn(lx, ly, ui->graph_mode)) {
+        ui->specgram_on = !ui->specgram_on;
+        return UI_ACTION_SPECGRAM;
     }
 
     /* Graph mode toggle buttons — active in both app modes, checked first. */
@@ -1749,6 +1857,9 @@ ui_action_t ui_on_key(ui_t *ui, const SDL_KeyboardEvent *e, app_mode_t mode)
     case SDL_SCANCODE_D:
         ui->wave_decompose = !ui->wave_decompose;
         return UI_ACTION_WAVE_DECOMPOSE;
+    case SDL_SCANCODE_G:
+        ui->specgram_on = !ui->specgram_on;
+        return UI_ACTION_SPECGRAM;
     case SDL_SCANCODE_P:
         if (shift) {
             if (mode == APP_MODE_PLAYER) { return UI_ACTION_NONE; }

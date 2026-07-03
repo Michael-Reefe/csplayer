@@ -58,6 +58,12 @@ typedef struct {
 
     /* SDL_GetTicksNS() at the end of the previous frame, for frame pacing. */
     u64 last_frame_ns;
+
+    /* SDL_GetTicksNS() at the previous spectrogram update, for its dt. */
+    u64 specgram_last_ns;
+
+    /* SDL_GetTicksNS() of the last spectrogram seek-break, for debouncing. */
+    u64 specgram_break_ns;
 } app_t;
 
 /* Single global instance — zero-initialised in .bss (NASA Rule 3). */
@@ -319,6 +325,16 @@ static void update_spectrum(app_t *app)
     fft_process(&app->fft, app->pcm_snapshot);
     spectrum_update(&app->spectrum, &app->fft);
 
+    /* Scroll the spectrogram only while audio plays (pause/stop freeze it).
+     * dt is capped so a stall cannot advance more than a couple of rows. */
+    u64 now = SDL_GetTicksNS();
+    f32 dt  = (f32)(now - app->specgram_last_ns) / 1e9f;
+    app->specgram_last_ns = now;
+    if (dt > 0.1f) { dt = 0.1f; }
+    if (app->audio.status == AUDIO_STATUS_PLAYING) {
+        spectrum_update_specgram(&app->spectrum, &app->fft, dt);
+    }
+
     f32 sr = (app->audio.sample_rate > 0.0f)
                  ? app->audio.sample_rate : (f32)SYNTH_SAMPLE_RATE;
     i32 th = (app->ui.graph_mode == GRAPH_MODE_BOTH) ? SPEC_H / 2 : SPEC_H;
@@ -385,17 +401,35 @@ static void dispatch_play_pause(app_t *app)
     }
 }
 
+/*
+ * Register a timeline jump with the spectrogram: scroll a blank break into
+ * the waterfall, coalescing rapid seek bursts (scrub drags, wheel spins)
+ * within SPECGRAM_BREAK_COOLDOWN_NS of the previous one into a single break.
+ */
+static void note_seek_break(app_t *app)
+{
+    assert(app != NULL);
+    assert(SPECGRAM_BREAK_ROWS > 0);
+    u64 now = SDL_GetTicksNS();
+    if (now - app->specgram_break_ns >= SPECGRAM_BREAK_COOLDOWN_NS) {
+        spectrum_specgram_break(&app->spectrum);
+    }
+    app->specgram_break_ns = now;
+}
+
 static void dispatch_rewind(app_t *app)
 {
     assert(app != NULL);
     assert(app->audio.sample_rate > 0.0f);
     if (app->mode == APP_MODE_SYNTH) {
+        note_seek_break(app);
         (void)audio_seek(&app->audio, 0.0f);
     } else if (audio_elapsed_sec(&app->audio) < 1.0 &&
                playlist_prev(&app->playlist) >= 0) {
         load_current_track(app);
         (void)audio_play(&app->audio);
     } else {
+        note_seek_break(app);
         (void)audio_seek(&app->audio, 0.0f);
     }
 }
@@ -439,6 +473,8 @@ static void dispatch_mode_toggle(app_t *app)
     audio_unload(&app->audio);
     app->mode = was_synth ? APP_MODE_PLAYER : APP_MODE_SYNTH;
     app->ui.synth_playing = false;
+    /* Wipe the spectrogram so the previous mode's audio doesn't linger. */
+    spectrum_specgram_clear(&app->spectrum);
     if (was_synth && app->playlist.current >= 0) { load_current_track(app); }
 }
 
@@ -463,36 +499,13 @@ static void dispatch_synth_note(app_t *app, i32 new_note)
 }
 
 /* Dispatch a ui_action_t returned by any input handler to audio/playlist. */
-static void dispatch_action(app_t *app, ui_action_t action)
+/* Dispatch the synth instrument/note selection actions (step and set). */
+static void dispatch_synth_select(app_t *app, ui_action_t action)
 {
     assert(app != NULL);
-    assert(app->playlist.count <= PLAYLIST_MAX);
+    assert(SYNTH_INSTRUMENTS > 0 && SYNTH_NOTES > 0);
 
     switch (action) {
-    case UI_ACTION_PLAY_PAUSE:  dispatch_play_pause(app);  break;
-    case UI_ACTION_REWIND:      dispatch_rewind(app);      break;
-    case UI_ACTION_NEXT:
-        if (app->mode != APP_MODE_SYNTH) {
-            (void)playlist_next(&app->playlist);
-            load_current_track(app);
-            (void)audio_play(&app->audio);
-        } else {
-            (void)audio_seek(&app->audio, 0.0f);
-        }
-        break;
-    case UI_ACTION_SEEK:
-        (void)audio_seek(&app->audio, app->ui.scrub_pos);
-        break;
-    case UI_ACTION_SET_VOLUME:
-        audio_set_volume(&app->audio, vol_pos_to_gain(app->ui.vol_pos));
-        break;
-    case UI_ACTION_OPEN_DIALOG: dispatch_open_dialog(app); break;
-    case UI_ACTION_PL_SELECT:
-        (void)playlist_set_current(&app->playlist, app->ui.pl_hover);
-        load_current_track(app);
-        break;
-    case UI_ACTION_PL_REMOVE:   dispatch_pl_remove(app);   break;
-    case UI_ACTION_MODE_TOGGLE: dispatch_mode_toggle(app); break;
     case UI_ACTION_SYNTH_INST_UP:
         dispatch_synth_inst(app, (app->synth.inst + 1) % SYNTH_INSTRUMENTS);
         break;
@@ -515,11 +528,59 @@ static void dispatch_action(app_t *app, ui_action_t action)
     case UI_ACTION_SYNTH_NOTE_SET:
         dispatch_synth_note(app, app->ui.synth_dd_select);
         break;
+    default:
+        break;
+    }
+}
+
+static void dispatch_action(app_t *app, ui_action_t action)
+{
+    assert(app != NULL);
+    assert(app->playlist.count <= PLAYLIST_MAX);
+
+    switch (action) {
+    case UI_ACTION_PLAY_PAUSE:  dispatch_play_pause(app);  break;
+    case UI_ACTION_REWIND:      dispatch_rewind(app);      break;
+    case UI_ACTION_NEXT:
+        if (app->mode != APP_MODE_SYNTH) {
+            (void)playlist_next(&app->playlist);
+            load_current_track(app);
+            (void)audio_play(&app->audio);
+        } else {
+            note_seek_break(app);
+            (void)audio_seek(&app->audio, 0.0f);
+        }
+        break;
+    case UI_ACTION_SEEK:
+        note_seek_break(app);
+        (void)audio_seek(&app->audio, app->ui.scrub_pos);
+        break;
+    case UI_ACTION_SET_VOLUME:
+        audio_set_volume(&app->audio, vol_pos_to_gain(app->ui.vol_pos));
+        break;
+    case UI_ACTION_OPEN_DIALOG: dispatch_open_dialog(app); break;
+    case UI_ACTION_PL_SELECT:
+        (void)playlist_set_current(&app->playlist, app->ui.pl_hover);
+        load_current_track(app);
+        break;
+    case UI_ACTION_PL_REMOVE:   dispatch_pl_remove(app);   break;
+    case UI_ACTION_MODE_TOGGLE: dispatch_mode_toggle(app); break;
+    case UI_ACTION_SYNTH_INST_UP:
+    case UI_ACTION_SYNTH_INST_DOWN:
+    case UI_ACTION_SYNTH_NOTE_UP:
+    case UI_ACTION_SYNTH_NOTE_DOWN:
+    case UI_ACTION_SYNTH_INST_SET:
+    case UI_ACTION_SYNTH_NOTE_SET:
+        dispatch_synth_select(app, action);
+        break;
     case UI_ACTION_GRAPH_MODE:
         /* graph_mode already updated by ui.c; no further state change needed */
         break;
     case UI_ACTION_WAVE_DECOMPOSE:
         /* wave_decompose already toggled by ui.c; no further state change needed */
+        break;
+    case UI_ACTION_SPECGRAM:
+        /* specgram_on already toggled by ui.c; scanning runs regardless */
         break;
     case UI_ACTION_FULLSCREEN:
         (void)SDL_SetWindowFullscreen(app->window,
@@ -588,6 +649,7 @@ static void handle_mouse_motion(app_t *app, SDL_Event *ev)
                                           &mot.x, &mot.y);
     ui_action_t action = ui_on_mouse_motion(&app->ui, &mot, held, &app->playlist);
     if (action == UI_ACTION_SEEK) {
+        note_seek_break(app);
         (void)audio_seek(&app->audio, app->ui.scrub_pos);
     } else if (action == UI_ACTION_SET_VOLUME) {
         audio_set_volume(&app->audio, vol_pos_to_gain(app->ui.vol_pos));
@@ -663,6 +725,7 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result)
     for (i32 i = 0; i < (i32)SDL_arraysize(app->ui.pl_row_tex); i++) {
         if (app->ui.pl_row_tex[i] != NULL) { SDL_DestroyTexture(app->ui.pl_row_tex[i]); }
     }
+    if (app->ui.specgram_tex != NULL) { SDL_DestroyTexture(app->ui.specgram_tex); }
     if (app->ui.font != NULL) {
         TTF_CloseFont(app->ui.font);
         app->ui.font = NULL;

@@ -2,6 +2,18 @@
 
 A lightweight audio player program that shows you the spectrum of your audio in real time.  Ever wanted to see the frequencies that your favorite music is putting out, without the ugly bars that audio programs so typically use?  This is the program for you!  The spectrum is shown in high detail, from 20 Hz to 20 kHz, for all of your spectral sleuthing needs (I just think it looks neat).
 
+The frequency plot can also overlay a **scrolling spectrogram** (waterfall):
+the newest spectrum is drawn at the top and the image slides downward, showing
+the last 5 seconds of audio with amplitude mapped to a purple→pink color ramp
+behind the live spectrum line; the most prominent frequencies flash bright
+yellow as they enter at the top, and seeking leaves a visible break in the
+waterfall.  Toggle it
+with the **Spectrogram** button in
+the bottom-left of the frequency plot (or press **G**); it works in both the
+Spec and Both graph modes.  Other keys: **Space** play/pause, **←/→**
+previous/next, **S/W/B** graph modes, **D** band-decomposed waveform,
+**F11** fullscreen.
+
 ### Installing
 
 To install a pre-built program, binaries are available for windows (x86_64 architecture) and macOS (apple silicon).  Check out the releases to find downloads for them!

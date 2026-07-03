@@ -51,6 +51,8 @@ typedef enum {
     UI_ACTION_GRAPH_MODE,        /* graph_mode already updated by ui.c         */
     /* Band-decompose toggle */
     UI_ACTION_WAVE_DECOMPOSE,    /* wave_decompose toggled; already updated by ui.c */
+    /* Spectrogram toggle */
+    UI_ACTION_SPECGRAM,          /* specgram_on toggled; already updated by ui.c    */
     /* Window */
     UI_ACTION_FULLSCREEN,        /* toggle SDL fullscreen (F11)                */
 } ui_action_t;
@@ -106,6 +108,13 @@ typedef struct {
      * side-by-side sub-panels (bass / mids / highs).  Initialised false by SDL_memset.
      * No effect when graph_mode == GRAPH_MODE_FREQ. */
     bool wave_decompose;
+    /* Scrolling spectrogram overlay in the freq plot (Spec and Both modes).
+     * specgram_tex is created once on first visible draw (Rule 3: one-time
+     * SDL resource, like the header title cache) and destroyed in SDL_AppQuit.
+     * specgram_px stages one texture row of RGBA pixels per upload. */
+    bool         specgram_on;
+    SDL_Texture *specgram_tex;
+    u8           specgram_px[SPECGRAM_COLS * 4];
     /* Sub-row remainder of mouse-wheel deltas for the discrete list/dropdown
      * scrollers.  A traditional wheel sends dy = ±1 per notch (→ one step), but a
      * trackpad sends many small fractional deltas; carrying the remainder here
@@ -121,10 +130,13 @@ typedef struct {
  *
  * When mode == APP_MODE_SYNTH the playlist panel is replaced by the synth
  * panel; otherwise the playlist is shown as normal.
+ *
+ * spectrum is non-const because drawing consumes the spectrogram's dirty-row
+ * state (spectrum_specgram_clear_dirty) after uploading it to the texture.
  */
 void ui_draw(SDL_Renderer       *r,
              const audio_t      *audio,
-             const spectrum_t   *spectrum,
+             spectrum_t         *spectrum,
              const playlist_t   *playlist,
              ui_t               *ui,
              app_mode_t          mode,
@@ -162,6 +174,7 @@ ui_action_t ui_on_mouse_up(ui_t *ui, const SDL_MouseButtonEvent *e);
  * W       → GRAPH_MODE_TIME  (wave)
  * B       → GRAPH_MODE_BOTH  (both)
  * D       → toggle wave_decompose
+ * G       → toggle specgram_on (spectrogram)
  * Shift+P → APP_MODE_PLAYER
  * Shift+S → APP_MODE_SYNTH
  */

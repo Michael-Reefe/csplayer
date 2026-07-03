@@ -513,6 +513,247 @@ static void test_bands_coeff_cache(void)
     TEST_END();
 }
 
+/* ── Scrolling spectrogram tests ─────────────────────────────────────────── */
+
+/* Set every FFT magnitude to `mag` so col_db is LUT-independent. */
+static void set_flat_mags(f32 mag)
+{
+    for (i32 k = 0; k < FFT_BINS; k++) { g_fft.mags[k] = mag; }
+}
+
+static void test_specgram_accumulate_and_advance(void)
+{
+    TEST_BEGIN("specgram_accumulate_and_advance");
+    spectrum_specgram_clear(&g_spec);
+    spectrum_specgram_clear_dirty(&g_spec);
+    set_flat_mags(1.0f);   /* 0 dBFS everywhere → quantised amplitude 255 */
+
+    /* Sub-row dt: head stays, current frame merges into it (one dirty row). */
+    spectrum_update_specgram(&g_spec, &g_fft, SPECGRAM_ROW_S * 0.25f);
+    CHECK(g_spec.sg_head == 0);
+    CHECK(g_spec.sg_dirty == 1);
+    CHECK(g_spec.sg_amp[0][0] == 255);
+    CHECK(g_spec.sg_amp[0][SPECGRAM_COLS - 1] == 255);
+
+    /* Crossing one row period advances the head once, wrapping downward; the
+     * dirty run covers the advance plus the demoted hot zone. */
+    spectrum_update_specgram(&g_spec, &g_fft, SPECGRAM_ROW_S);
+    CHECK(g_spec.sg_head == SPECGRAM_ROWS - 1);
+    CHECK(g_spec.sg_dirty == 1 + SPECGRAM_HOT_ROWS);
+    CHECK(g_spec.sg_amp[SPECGRAM_ROWS - 1][0] == 255);
+    TEST_END();
+}
+
+static void test_specgram_max_merge(void)
+{
+    TEST_BEGIN("specgram_max_merge");
+    spectrum_specgram_clear(&g_spec);
+    spectrum_specgram_clear_dirty(&g_spec);
+
+    /* Loud frame then silent frame within one row period: the peak survives. */
+    set_flat_mags(1.0f);
+    spectrum_update_specgram(&g_spec, &g_fft, 0.0f);
+    CHECK(g_spec.sg_amp[g_spec.sg_head][10] == 255);
+    set_flat_mags(0.0f);
+    spectrum_update_specgram(&g_spec, &g_fft, 0.0f);
+    CHECK(g_spec.sg_amp[g_spec.sg_head][10] == 255);
+    CHECK(g_spec.sg_dirty == 1);
+    TEST_END();
+}
+
+static void test_specgram_col_alignment(void)
+{
+    TEST_BEGIN("specgram_col_alignment");
+    spectrum_init_lut(&g_spec, 44100.0f);   /* fresh LUT + cleared grid */
+    spectrum_specgram_clear_dirty(&g_spec);
+
+    /* Energy ONLY in the FFT bins of the highest LUT column: it must land in
+     * the LAST texture column and not in the first — i.e. the column-bucket
+     * mapping spans the full frequency axis for any SPECGRAM_COLS.
+     * Regression: a hardcoded 2:1 decimation sampled only the lower half of
+     * the axis when SPECGRAM_COLS was changed. */
+    set_flat_mags(0.0f);
+    for (i32 k = g_spec.bin_lo[SPEC_W - 1]; k < FFT_BINS; k++) {
+        g_fft.mags[k] = 1.0f;
+    }
+    spectrum_update_specgram(&g_spec, &g_fft, 0.0f);
+    CHECK(g_spec.sg_amp[0][SPECGRAM_COLS - 1] == 255);
+    CHECK(g_spec.sg_amp[0][0] == 0);
+    TEST_END();
+}
+
+static void test_specgram_huge_dt_clamps(void)
+{
+    TEST_BEGIN("specgram_huge_dt_clamps");
+    spectrum_specgram_clear(&g_spec);
+    spectrum_specgram_clear_dirty(&g_spec);
+    set_flat_mags(0.0f);
+
+    /* Two full windows of elapsed time: advances are bounded to one ring
+     * (head returns to where it started) and the excess time is discarded. */
+    spectrum_update_specgram(&g_spec, &g_fft, 2.0f * SPECGRAM_WINDOW_S);
+    CHECK(g_spec.sg_head == 0);
+    CHECK(g_spec.sg_dirty == SPECGRAM_ROWS);
+    CHECK(g_spec.sg_acc < SPECGRAM_ROW_S);
+    TEST_END();
+}
+
+static void test_specgram_dirty_accumulates(void)
+{
+    TEST_BEGIN("specgram_dirty_accumulates");
+    spectrum_specgram_clear(&g_spec);
+    spectrum_specgram_clear_dirty(&g_spec);
+    set_flat_mags(0.0f);
+
+    /* Successive advancing calls with no draw between them (display toggled
+     * off): the dirty count must ACCUMULATE one row per advance on top of
+     * the hot-zone term, not reset to a per-call value.  Regression: a
+     * non-accumulating rule once forgot rows written while hidden, leaving
+     * stale pixels after re-enabling. */
+    spectrum_update_specgram(&g_spec, &g_fft, SPECGRAM_ROW_S);
+    CHECK(g_spec.sg_dirty == 1 + SPECGRAM_HOT_ROWS);
+    spectrum_update_specgram(&g_spec, &g_fft, SPECGRAM_ROW_S);
+    CHECK(g_spec.sg_dirty == 2 + SPECGRAM_HOT_ROWS);
+    spectrum_update_specgram(&g_spec, &g_fft, 3.5f * SPECGRAM_ROW_S);
+    CHECK(g_spec.sg_dirty == 5 + SPECGRAM_HOT_ROWS);
+    TEST_END();
+}
+
+static void test_specgram_break(void)
+{
+    TEST_BEGIN("specgram_break");
+    spectrum_specgram_clear(&g_spec);
+    spectrum_specgram_clear_dirty(&g_spec);
+    set_flat_mags(1.0f);
+    spectrum_update_specgram(&g_spec, &g_fft, 0.0f);   /* data in head row */
+    CHECK(g_spec.sg_amp[g_spec.sg_head][0] == 255);
+
+    /* Break: SPECGRAM_BREAK_ROWS blank rows scroll in ahead of the content. */
+    i32 head0  = g_spec.sg_head;
+    i32 dirty0 = g_spec.sg_dirty;
+    spectrum_specgram_break(&g_spec);
+    i32 head1 = (head0 + SPECGRAM_ROWS - SPECGRAM_BREAK_ROWS) % SPECGRAM_ROWS;
+    CHECK(g_spec.sg_head == head1);
+    /* Same accumulate-or-zone dirty rule as the update path. */
+    i32 want = dirty0 + SPECGRAM_BREAK_ROWS;
+    i32 zone = SPECGRAM_BREAK_ROWS + SPECGRAM_HOT_ROWS;
+    if (want < zone)          { want = zone; }
+    if (want > SPECGRAM_ROWS) { want = SPECGRAM_ROWS; }
+    CHECK(g_spec.sg_dirty == want);
+    CHECK(g_spec.sg_acc == SPECGRAM_ROW_S);
+    for (i32 i = 0; i < SPECGRAM_BREAK_ROWS; i++) {
+        i32 r = (head1 + i) % SPECGRAM_ROWS;
+        CHECK(g_spec.sg_amp[r][0] == 0);
+        CHECK(g_spec.sg_amp[r][SPECGRAM_COLS - 1] == 0);
+    }
+
+    /* The pre-charged accumulator makes the next update start a FRESH row,
+     * so the break rows stay fully blank.  (Modulo hoisted out of CHECK —
+     * '%' inside a CHECK breaks its stringified printf format.) */
+    spectrum_update_specgram(&g_spec, &g_fft, 0.0f);
+    i32 head2 = (head1 + SPECGRAM_ROWS - 1) % SPECGRAM_ROWS;
+    CHECK(g_spec.sg_head == head2);
+    CHECK(g_spec.sg_amp[g_spec.sg_head][0] == 255);
+    for (i32 i = 0; i < SPECGRAM_BREAK_ROWS; i++) {
+        i32 r = (head1 + i) % SPECGRAM_ROWS;
+        CHECK(g_spec.sg_amp[r][0] == 0);
+    }
+    TEST_END();
+}
+
+static void test_specgram_clear_and_init(void)
+{
+    TEST_BEGIN("specgram_clear_and_init");
+    set_flat_mags(1.0f);
+    spectrum_update_specgram(&g_spec, &g_fft, 0.0f);
+    CHECK(g_spec.sg_amp[g_spec.sg_head][0] == 255);
+
+    /* Explicit clear: grid zeroed, head/acc reset, everything dirty. */
+    spectrum_specgram_clear(&g_spec);
+    CHECK(g_spec.sg_head  == 0);
+    CHECK(g_spec.sg_acc   == 0.0f);
+    CHECK(g_spec.sg_dirty == SPECGRAM_ROWS);
+    CHECK(g_spec.sg_amp[0][0] == 0);
+    CHECK(g_spec.sg_amp[SPECGRAM_ROWS - 1][SPECGRAM_COLS - 1] == 0);
+
+    /* spectrum_init_lut clears too (track / sample-rate change). */
+    spectrum_update_specgram(&g_spec, &g_fft, 0.0f);
+    CHECK(g_spec.sg_amp[0][0] == 255);
+    spectrum_init_lut(&g_spec, 44100.0f);
+    CHECK(g_spec.sg_amp[0][0] == 0);
+    CHECK(g_spec.sg_dirty == SPECGRAM_ROWS);
+
+    spectrum_specgram_clear_dirty(&g_spec);
+    CHECK(g_spec.sg_dirty == 0);
+    TEST_END();
+}
+
+static void test_specgram_pixels_ramp(void)
+{
+    TEST_BEGIN("specgram_pixels_ramp");
+    static const u8 ramp_lo[3] = { SPECGRAM_COL_LO };
+    static const u8 ramp_hi[3] = { SPECGRAM_COL_HI };
+    static u8 px[SPECGRAM_COLS * 4];
+
+    /* Below-threshold cells use the pink history ramp with quadratic alpha. */
+    spectrum_specgram_clear(&g_spec);
+    g_spec.sg_amp[20][0] = 0;     /* silence           */
+    g_spec.sg_amp[20][1] = 128;   /* mid               */
+    g_spec.sg_amp[20][2] = 200;   /* loud, not yet hot */
+    spectrum_specgram_pixels(&g_spec, 20, px);
+
+    /* Silence: low-ramp colour, fully transparent. */
+    CHECK(px[0] == ramp_lo[0] && px[1] == ramp_lo[1] && px[2] == ramp_lo[2]);
+    CHECK(px[3] == 0);
+    /* Mid amplitude: every colour channel strictly between the ramp ends;
+     * alpha below the linear midpoint (quadratic fade). */
+    CHECK(px[4] > ramp_lo[0] && px[4] < ramp_hi[0]);
+    CHECK(px[5] > ramp_lo[1] && px[5] < ramp_hi[1]);
+    CHECK(px[6] > ramp_lo[2] && px[6] < ramp_hi[2]);
+    CHECK(px[7] > 0 && px[7] < 128);
+    /* Louder (still below threshold): higher alpha than mid. */
+    CHECK(px[11] > px[7]);
+    TEST_END();
+}
+
+static void test_specgram_pixels_hot(void)
+{
+    TEST_BEGIN("specgram_pixels_hot");
+    static const u8 ramp_hi[3] = { SPECGRAM_COL_HI };
+    static const u8 col_hot[3] = { SPECGRAM_COL_HOT };
+    static u8 px[SPECGRAM_COLS * 4];
+    static u8 px_out[SPECGRAM_COLS * 4];
+    /* Same quantisation as spectrum_specgram_pixels. */
+    const u8 hot_q = (u8)((SPECGRAM_HOT_DB - DB_BOT) / (DB_TOP - DB_BOT)
+                          * 255.0f + 0.5f);
+
+    /* After clear the head is row 0; rows 0..SPECGRAM_HOT_ROWS-1 form the
+     * hot-eligible zone. */
+    spectrum_specgram_clear(&g_spec);
+    CHECK(g_spec.sg_head == 0);
+    g_spec.sg_amp[0][0] = (u8)(hot_q - 1);   /* just below threshold */
+    g_spec.sg_amp[0][1] = hot_q;             /* exactly at threshold */
+    g_spec.sg_amp[0][2] = 255;               /* full scale           */
+    spectrum_specgram_pixels(&g_spec, 0, px);
+
+    /* Just below threshold: still the pink ramp, not the hot colour. */
+    CHECK(px[1] != col_hot[1]);
+    /* At threshold, in zone: flat hot colour, LINEAR alpha (== amplitude). */
+    CHECK(px[4] == col_hot[0] && px[5] == col_hot[1] && px[6] == col_hot[2]);
+    CHECK(px[7] == hot_q);
+    /* Full scale, in zone: hot colour, fully opaque. */
+    CHECK(px[8] == col_hot[0] && px[9] == col_hot[1] && px[10] == col_hot[2]);
+    CHECK(px[11] == 255);
+
+    /* The same full-scale amplitude OUTSIDE the zone stays on the ramp. */
+    g_spec.sg_amp[SPECGRAM_HOT_ROWS][0] = 255;
+    spectrum_specgram_pixels(&g_spec, SPECGRAM_HOT_ROWS, px_out);
+    CHECK(px_out[0] == ramp_hi[0] && px_out[1] == ramp_hi[1] &&
+          px_out[2] == ramp_hi[2]);
+    CHECK(px_out[3] == 255);
+    TEST_END();
+}
+
 /* ── Suite ───────────────────────────────────────────────────────────────── */
 
 void run_spectrum_tests(void)
@@ -553,6 +794,16 @@ void run_spectrum_tests(void)
     test_bands_pts_bounds_iir();
     test_bands_silence_iir();
     test_bands_coeff_cache();
+
+    test_specgram_accumulate_and_advance();
+    test_specgram_max_merge();
+    test_specgram_col_alignment();
+    test_specgram_huge_dt_clamps();
+    test_specgram_dirty_accumulates();
+    test_specgram_break();
+    test_specgram_clear_and_init();
+    test_specgram_pixels_ramp();
+    test_specgram_pixels_hot();
 
     fft_quit(&g_fft);
 }

@@ -77,6 +77,20 @@ typedef struct {
     biquad_t band_lp_mids;
     biquad_t band_hp_mids;
     f32      band_coeff_rate;
+
+    /* ── Scrolling spectrogram ring buffer ─────────────────────────────── */
+    /* sg_amp[r][c] is the quantised amplitude (0–255 ≙ DB_BOT–DB_TOP) of
+     * texture column c (spanning 2 logical px) in ring row r.  sg_head
+     * indexes the NEWEST row; newer rows are written at decreasing index
+     * (wrapping), so ascending rows = older data and the ring renders
+     * top-to-bottom as two contiguous texture pieces.  A zeroed struct
+     * (sg_dirty = 0) is safely "clean"; spectrum_init_lut establishes the
+     * real cleared state. */
+    u8  sg_amp[SPECGRAM_ROWS][SPECGRAM_COLS];
+    i32 sg_head;    /* index of the newest ring row                       */
+    f32 sg_acc;     /* seconds accumulated toward the next row advance    */
+    i32 sg_dirty;   /* rows at/behind sg_head needing texture re-upload,
+                     * saturating at SPECGRAM_ROWS                        */
 } spectrum_t;
 
 /* ── Public interface ────────────────────────────────────────────────────── */
@@ -152,5 +166,47 @@ void spectrum_update_time(spectrum_t *s, const f32 *samples, i32 n,
  */
 void spectrum_update_bands(spectrum_t *s, const f32 *samples, i32 n,
                            f32 sample_rate, i32 plot_y, i32 plot_h);
+
+/*
+ * Advance the scrolling spectrogram by dt seconds and merge the current FFT
+ * frame into the newest ring row.
+ *
+ * Every SPECGRAM_ROW_S seconds of accumulated dt the head advances one row
+ * (bounded to SPECGRAM_ROWS per call; excess time is discarded) and the new
+ * head row starts empty.  All frames landing within one row period max-merge,
+ * so short transients stay visible.  Call only while audio is playing so the
+ * image freezes on pause/stop.
+ */
+void spectrum_update_specgram(spectrum_t *s, const fft_t *f, f32 dt);
+
+/*
+ * Convert ring row `row` to SPECGRAM_COLS RGBA32 pixels (4 bytes each,
+ * R,G,B,A byte order — endian-safe).  RGB ramps SPECGRAM_COL_LO →
+ * SPECGRAM_COL_HI with amplitude; alpha rises quadratically so silence is
+ * fully transparent.  Within the newest SPECGRAM_HOT_ROWS rows, cells at or
+ * above the SPECGRAM_HOT_DB threshold render as flat SPECGRAM_COL_HOT with
+ * LINEAR alpha instead, so the most prominent frequencies flash bright at
+ * the top of the waterfall and settle into the ramp as they scroll out of
+ * the zone (the update/break dirty rules always cover the demoted rows).
+ */
+void spectrum_specgram_pixels(const spectrum_t *s, i32 row, u8 *dst);
+
+/*
+ * Scroll SPECGRAM_BREAK_ROWS blank rows into the waterfall to mark a timeline
+ * discontinuity (seek/rewind).  The time accumulator is pre-charged so the
+ * first post-seek update starts a fresh row, leaving the break fully blank.
+ * The caller debounces rapid seek bursts (e.g. scrub drags) into one break.
+ */
+void spectrum_specgram_break(spectrum_t *s);
+
+/*
+ * Wipe the spectrogram: zero all rows, reset head/accumulator, and mark every
+ * row dirty so the next draw re-uploads the cleared image.  Called by
+ * spectrum_init_lut (track changes) and on player/synth mode toggles.
+ */
+void spectrum_specgram_clear(spectrum_t *s);
+
+/* Mark all rows clean.  The UI calls this after uploading dirty rows. */
+void spectrum_specgram_clear_dirty(spectrum_t *s);
 
 #endif /* CSPLAYER_SPECTRUM_H */

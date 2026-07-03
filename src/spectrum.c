@@ -54,6 +54,32 @@ void spectrum_init_lut(spectrum_t *s, f32 sample_rate)
     /* Force spectrum_update_bands() to rebuild its cached filter coefficients
      * (the rate may have changed). */
     s->band_coeff_rate = 0.0f;
+
+    /* Wipe the spectrogram so a new track/rate starts with a blank window. */
+    spectrum_specgram_clear(s);
+}
+
+/*
+ * Interpolate the FFT magnitude for pixel column x via the log-frequency LUT
+ * and convert to dB, clamped to the display range [DB_BOT, DB_TOP].
+ * Shared by the spectrum line and the spectrogram so the mapping is identical.
+ */
+static f32 col_db(const spectrum_t *s, const fft_t *f, i32 x)
+{
+    assert(s->bin_lo[x] >= 0 && s->bin_lo[x] < FFT_BINS);
+    assert(s->bin_hi[x] >= 0 && s->bin_hi[x] < FFT_BINS);
+
+    /* Linearly interpolate between adjacent FFT bins. */
+    f32 lo  = f->mags[s->bin_lo[x]];
+    f32 hi  = f->mags[s->bin_hi[x]];
+    f32 mag = lo + s->bin_frac[x] * (hi - lo);
+
+    /* Convert to dB; add a small epsilon to avoid log10(0). */
+    f32 db = 20.0f * log10f(mag + 1e-10f);
+
+    if (db < DB_BOT) { db = DB_BOT; }
+    if (db > DB_TOP) { db = DB_TOP; }
+    return db;
 }
 
 void spectrum_update(spectrum_t *s, const fft_t *f)
@@ -65,20 +91,7 @@ void spectrum_update(spectrum_t *s, const fft_t *f)
     assert(db_range > 0.0f);
 
     for (i32 x = 0; x < SPEC_W; x++) {
-        assert(s->bin_lo[x] >= 0 && s->bin_lo[x] < FFT_BINS);
-        assert(s->bin_hi[x] >= 0 && s->bin_hi[x] < FFT_BINS);
-
-        /* Linearly interpolate between adjacent FFT bins. */
-        f32 lo  = f->mags[s->bin_lo[x]];
-        f32 hi  = f->mags[s->bin_hi[x]];
-        f32 mag = lo + s->bin_frac[x] * (hi - lo);
-
-        /* Convert to dB; add a small epsilon to avoid log10(0). */
-        f32 db = 20.0f * log10f(mag + 1e-10f);
-
-        /* Clamp to the display range. */
-        if (db < DB_BOT) { db = DB_BOT; }
-        if (db > DB_TOP) { db = DB_TOP; }
+        f32 db = col_db(s, f, x);
 
         /* Exponential smoothing in dB space. */
         s->smooth_db[x] = SMOOTH_COEFF * s->smooth_db[x]
@@ -354,4 +367,145 @@ void spectrum_update_bands(spectrum_t *s, const f32 *samples, i32 n,
     biquad_process(&s->band_hp_mids, samples, s->band_scratch, n);
     fill_band_pts(s, s->high_pts, s->smooth_high, s->prev_high,
                   2 * BAND_W, plot_y, plot_h, high_win, n, BAND_HIGH_SMOOTH);
+}
+
+/* ── Scrolling spectrogram (waterfall) ─────────────────────────────────────── */
+
+void spectrum_update_specgram(spectrum_t *s, const fft_t *f, f32 dt)
+{
+    assert(s  != NULL);
+    assert(f  != NULL);
+    assert(dt >= 0.0f);
+    assert(s->sg_head >= 0 && s->sg_head < SPECGRAM_ROWS);
+
+    /* Advance the ring one row per SPECGRAM_ROW_S of accumulated time.  The
+     * loop is bounded to a full ring per call; any excess time beyond that is
+     * discarded (an entire window has scrolled past — start fresh). */
+    s->sg_acc += dt;
+    i32 adv = 0;
+    for (i32 i = 0; i < SPECGRAM_ROWS && s->sg_acc >= SPECGRAM_ROW_S; i++) {
+        s->sg_acc -= SPECGRAM_ROW_S;
+        s->sg_head = (s->sg_head + SPECGRAM_ROWS - 1) % SPECGRAM_ROWS;
+        SDL_memset(s->sg_amp[s->sg_head], 0, sizeof(s->sg_amp[s->sg_head]));
+        adv++;
+    }
+    if (s->sg_acc >= SPECGRAM_ROW_S) { s->sg_acc = 0.0f; }
+
+    /* Dirty rule: the run must cover BOTH every row written since the last
+     * draw (dirty + adv — the count ACCUMULATES across calls so nothing is
+     * missed while the display is toggled off) AND the whole pre-advance hot
+     * zone (adv + SPECGRAM_HOT_ROWS — rows shifted out of the zone lose
+     * their highlight and need repainting). */
+    if (adv > 0) {
+        i32 need  = s->sg_dirty + adv;
+        i32 zone  = adv + SPECGRAM_HOT_ROWS;
+        if (need < zone)          { need = zone; }
+        if (need > SPECGRAM_ROWS) { need = SPECGRAM_ROWS; }
+        s->sg_dirty = need;
+    }
+
+    /* Max-merge the current frame into the newest row so every frame within a
+     * row period contributes and short transients survive.  Texture column c
+     * covers the logical-px LUT columns [c·SPEC_W/COLS, (c+1)·SPEC_W/COLS);
+     * take the bucket max so narrow spectral peaks stay visible at any
+     * SPECGRAM_COLS.  Total inner iterations = SPEC_W (fixed bound). */
+    f32 range = DB_TOP - DB_BOT;
+    assert(range > 0.0f);
+    assert(SPECGRAM_COLS > 0 && SPECGRAM_COLS <= SPEC_W);
+    for (i32 c = 0; c < SPECGRAM_COLS; c++) {
+        i32 x0 = c * SPEC_W / SPECGRAM_COLS;
+        i32 x1 = (c + 1) * SPEC_W / SPECGRAM_COLS;
+        f32 db = DB_BOT;
+        for (i32 x = x0; x < x1; x++) {
+            f32 d = col_db(s, f, x);
+            if (d > db) { db = d; }
+        }
+        f32 t = (db - DB_BOT) / range;   /* clamped [0,1] */
+        u8  q = (u8)(t * 255.0f + 0.5f);
+        if (q > s->sg_amp[s->sg_head][c]) { s->sg_amp[s->sg_head][c] = q; }
+    }
+    if (s->sg_dirty < 1) { s->sg_dirty = 1; }
+}
+
+void spectrum_specgram_pixels(const spectrum_t *s, i32 row, u8 *dst)
+{
+    assert(s   != NULL);
+    assert(dst != NULL);
+    assert(row >= 0 && row < SPECGRAM_ROWS);
+
+    static const u8 ramp_lo[3] = { SPECGRAM_COL_LO };
+    static const u8 ramp_hi[3] = { SPECGRAM_COL_HI };
+    static const u8 col_hot[3] = { SPECGRAM_COL_HOT };
+
+    /* Quantised amplitude at/above which a cell renders "hot".  Hot colouring
+     * applies only within the newest SPECGRAM_HOT_ROWS rows; rows repaint in
+     * the normal ramp as they leave the zone (the dirty rule in
+     * spectrum_update_specgram always reaches past the zone's tail). */
+    const u8 hot_q = (u8)((SPECGRAM_HOT_DB - DB_BOT) / (DB_TOP - DB_BOT)
+                          * 255.0f + 0.5f);
+    i32  dist    = (row - s->sg_head + SPECGRAM_ROWS) % SPECGRAM_ROWS;
+    bool in_zone = (dist < SPECGRAM_HOT_ROWS);
+
+    for (i32 c = 0; c < SPECGRAM_COLS; c++) {
+        u8  q = s->sg_amp[row][c];
+        f32 t = (f32)q / 255.0f;
+        if (in_zone && q >= hot_q) {
+            /* Prominent frequency: flat bright colour, linear alpha. */
+            for (i32 k = 0; k < 3; k++) { dst[c * 4 + k] = col_hot[k]; }
+            dst[c * 4 + 3] = (u8)(t * 255.0f + 0.5f);
+        } else {
+            /* History ramp with quadratic alpha: silence fades into the
+             * panel background. */
+            for (i32 k = 0; k < 3; k++) {
+                f32 v = (f32)ramp_lo[k]
+                        + t * ((f32)ramp_hi[k] - (f32)ramp_lo[k]);
+                dst[c * 4 + k] = (u8)(v + 0.5f);
+            }
+            dst[c * 4 + 3] = (u8)(t * t * 255.0f + 0.5f);
+        }
+    }
+}
+
+void spectrum_specgram_clear(spectrum_t *s)
+{
+    assert(s != NULL);
+    assert(SPECGRAM_ROWS > 0);
+    SDL_memset(s->sg_amp, 0, sizeof(s->sg_amp));
+    s->sg_head  = 0;
+    s->sg_acc   = 0.0f;
+    s->sg_dirty = SPECGRAM_ROWS;   /* force full re-upload of the blank image */
+}
+
+void spectrum_specgram_clear_dirty(spectrum_t *s)
+{
+    assert(s != NULL);
+    assert(s->sg_dirty >= 0 && s->sg_dirty <= SPECGRAM_ROWS);
+    s->sg_dirty = 0;
+}
+
+void spectrum_specgram_break(spectrum_t *s)
+{
+    assert(s != NULL);
+    assert(s->sg_head >= 0 && s->sg_head < SPECGRAM_ROWS);
+    assert(SPECGRAM_BREAK_ROWS > 0 && SPECGRAM_BREAK_ROWS < SPECGRAM_ROWS);
+
+    /* Scroll SPECGRAM_BREAK_ROWS blank rows into the waterfall. */
+    for (i32 i = 0; i < SPECGRAM_BREAK_ROWS; i++) {
+        s->sg_head = (s->sg_head + SPECGRAM_ROWS - 1) % SPECGRAM_ROWS;
+        SDL_memset(s->sg_amp[s->sg_head], 0, sizeof(s->sg_amp[s->sg_head]));
+    }
+
+    /* Same dirty rule as spectrum_update_specgram: accumulate the written
+     * rows and cover the pre-break hot zone, whose rows just shifted out. */
+    {
+        i32 need = s->sg_dirty + SPECGRAM_BREAK_ROWS;
+        i32 zone = SPECGRAM_BREAK_ROWS + SPECGRAM_HOT_ROWS;
+        if (need < zone)          { need = zone; }
+        if (need > SPECGRAM_ROWS) { need = SPECGRAM_ROWS; }
+        s->sg_dirty = need;
+    }
+
+    /* Pre-charge the accumulator so the next update advances immediately:
+     * post-seek audio lands in a fresh row and the break rows stay blank. */
+    s->sg_acc = SPECGRAM_ROW_S;
 }
