@@ -10,6 +10,39 @@
 #include <math.h>
 #include <assert.h>
 
+/*
+ * Build the cubehelix colour LUT (D.A. Green 2011, Bull. Astron. Soc. India
+ * 39, 289): rgb(t) follows a helix around the grey diagonal so perceived
+ * brightness rises monotonically from black (t = 0) to white (t = 1).
+ * Parameters (start direction, rotations, hue, gamma) live in types.h.
+ */
+static void specgram_build_cmap(spectrum_t *s)
+{
+    assert(s != NULL);
+    assert(SPECGRAM_CMAP_N > 1);
+    static const f32 TWO_PI = 6.28318530717958647692f;
+
+    for (i32 q = 0; q < SPECGRAM_CMAP_N; q++) {
+        f32 t   = (f32)q / (f32)(SPECGRAM_CMAP_N - 1);
+        f32 lam = powf(t, SPECGRAM_CH_GAMMA);
+        f32 phi = TWO_PI * (SPECGRAM_CH_START / 3.0f
+                            + SPECGRAM_CH_ROT * t + 1.0f);
+        f32 amp = SPECGRAM_CH_HUE * lam * (1.0f - lam) * 0.5f;
+        f32 c   = cosf(phi);
+        f32 sn  = sinf(phi);
+
+        f32 rgb[3];
+        rgb[0] = lam + amp * (-0.14861f * c + 1.78277f * sn);
+        rgb[1] = lam + amp * (-0.29227f * c - 0.90649f * sn);
+        rgb[2] = lam + amp * ( 1.97294f * c);
+        for (i32 k = 0; k < 3; k++) {
+            if (rgb[k] < 0.0f) { rgb[k] = 0.0f; }
+            if (rgb[k] > 1.0f) { rgb[k] = 1.0f; }
+            s->sg_cmap[q][k] = (u8)(rgb[k] * 255.0f + 0.5f);
+        }
+    }
+}
+
 void spectrum_init_lut(spectrum_t *s, f32 sample_rate)
 {
     assert(s           != NULL);
@@ -55,8 +88,10 @@ void spectrum_init_lut(spectrum_t *s, f32 sample_rate)
      * (the rate may have changed). */
     s->band_coeff_rate = 0.0f;
 
-    /* Wipe the spectrogram so a new track/rate starts with a blank window. */
+    /* Wipe the spectrogram so a new track/rate starts with a blank window,
+     * and (re)build its colour LUT. */
     spectrum_specgram_clear(s);
+    specgram_build_cmap(s);
 }
 
 /*
@@ -433,18 +468,21 @@ void spectrum_specgram_pixels(const spectrum_t *s, i32 row, u8 *dst)
     assert(dst != NULL);
     assert(row >= 0 && row < SPECGRAM_ROWS);
 
-    static const u8 ramp_lo[3] = { SPECGRAM_COL_LO };
-    static const u8 ramp_hi[3] = { SPECGRAM_COL_HI };
     static const u8 col_hot[3] = { SPECGRAM_COL_HOT };
 
     /* Quantised amplitude at/above which a cell renders "hot".  Hot colouring
      * applies only within the newest SPECGRAM_HOT_ROWS rows; rows repaint in
-     * the normal ramp as they leave the zone (the dirty rule in
+     * the normal colormap as they leave the zone (the dirty rule in
      * spectrum_update_specgram always reaches past the zone's tail). */
     const u8 hot_q = (u8)((SPECGRAM_HOT_DB - DB_BOT) / (DB_TOP - DB_BOT)
                           * 255.0f + 0.5f);
     i32  dist    = (row - s->sg_head + SPECGRAM_ROWS) % SPECGRAM_ROWS;
     bool in_zone = (dist < SPECGRAM_HOT_ROWS);
+
+    assert(SPECGRAM_ALPHA_KNEE > 0.0f);
+    assert(SPECGRAM_ALPHA_MAX > 0.0f && SPECGRAM_ALPHA_MAX <= 1.0f);
+    const f32 inv_knee = 1.0f / SPECGRAM_ALPHA_KNEE;
+    const f32 a_scale  = SPECGRAM_ALPHA_MAX * 255.0f;
 
     for (i32 c = 0; c < SPECGRAM_COLS; c++) {
         u8  q = s->sg_amp[row][c];
@@ -452,16 +490,19 @@ void spectrum_specgram_pixels(const spectrum_t *s, i32 row, u8 *dst)
         if (in_zone && q >= hot_q) {
             /* Prominent frequency: flat bright colour, linear alpha. */
             for (i32 k = 0; k < 3; k++) { dst[c * 4 + k] = col_hot[k]; }
-            dst[c * 4 + 3] = (u8)(t * 255.0f + 0.5f);
+            dst[c * 4 + 3] = (u8)(t * a_scale + 0.5f);
         } else {
-            /* History ramp with quadratic alpha: silence fades into the
-             * panel background. */
+            /* Cubehelix colormap; alpha is a smoothstep saturating at the
+             * knee, capped at SPECGRAM_ALPHA_MAX so the spectrum line drawn
+             * on top keeps contrast, while the faint (black) end still
+             * dissolves into the panel. */
             for (i32 k = 0; k < 3; k++) {
-                f32 v = (f32)ramp_lo[k]
-                        + t * ((f32)ramp_hi[k] - (f32)ramp_lo[k]);
-                dst[c * 4 + k] = (u8)(v + 0.5f);
+                dst[c * 4 + k] = s->sg_cmap[q][k];
             }
-            dst[c * 4 + 3] = (u8)(t * t * 255.0f + 0.5f);
+            f32 u = t * inv_knee;
+            if (u > 1.0f) { u = 1.0f; }
+            f32 a = u * u * (3.0f - 2.0f * u);
+            dst[c * 4 + 3] = (u8)(a * a_scale + 0.5f);
         }
     }
 }

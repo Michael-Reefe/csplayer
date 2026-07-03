@@ -535,11 +535,15 @@ static void test_specgram_accumulate_and_advance(void)
     CHECK(g_spec.sg_amp[0][0] == 255);
     CHECK(g_spec.sg_amp[0][SPECGRAM_COLS - 1] == 255);
 
-    /* Crossing one row period advances the head once, wrapping downward; the
-     * dirty run covers the advance plus the demoted hot zone. */
+    /* Crossing one row period advances the head once, wrapping downward.
+     * The dirty run is the accumulate-or-zone rule: max(prior + advances,
+     * advances + SPECGRAM_HOT_ROWS) — written out so it holds for any
+     * configured zone depth, including 0 (hot highlighting disabled). */
     spectrum_update_specgram(&g_spec, &g_fft, SPECGRAM_ROW_S);
     CHECK(g_spec.sg_head == SPECGRAM_ROWS - 1);
-    CHECK(g_spec.sg_dirty == 1 + SPECGRAM_HOT_ROWS);
+    i32 want = 1 + 1;   /* prior merge row + one advance */
+    if (want < 1 + SPECGRAM_HOT_ROWS) { want = 1 + SPECGRAM_HOT_ROWS; }
+    CHECK(g_spec.sg_dirty == want);
     CHECK(g_spec.sg_amp[SPECGRAM_ROWS - 1][0] == 255);
     TEST_END();
 }
@@ -688,38 +692,81 @@ static void test_specgram_clear_and_init(void)
     TEST_END();
 }
 
+static void test_specgram_cmap(void)
+{
+    TEST_BEGIN("specgram_cmap");
+    spectrum_init_lut(&g_spec, 44100.0f);   /* builds sg_cmap */
+
+    /* Exact cubehelix endpoints: black at amplitude 0, white at full scale. */
+    CHECK(g_spec.sg_cmap[0][0] == 0 && g_spec.sg_cmap[0][1] == 0 &&
+          g_spec.sg_cmap[0][2] == 0);
+    CHECK(g_spec.sg_cmap[SPECGRAM_CMAP_N - 1][0] == 255 &&
+          g_spec.sg_cmap[SPECGRAM_CMAP_N - 1][1] == 255 &&
+          g_spec.sg_cmap[SPECGRAM_CMAP_N - 1][2] == 255);
+
+    /* The defining cubehelix property: perceived brightness (the luminance
+     * weights from Green 2011) rises monotonically along the map.  Allow a
+     * ±1 tolerance for 8-bit rounding jitter. */
+    f32 prev = -1.0f;
+    for (i32 q = 0; q < SPECGRAM_CMAP_N; q++) {
+        f32 y = 0.30f * (f32)g_spec.sg_cmap[q][0]
+              + 0.59f * (f32)g_spec.sg_cmap[q][1]
+              + 0.11f * (f32)g_spec.sg_cmap[q][2];
+        CHECK(y >= prev - 1.0f);
+        prev = y;
+    }
+
+    /* Mid-ramp is an actual colour, not grey (the helix has saturation). */
+    i32 mid = SPECGRAM_CMAP_N / 2;
+    CHECK(g_spec.sg_cmap[mid][0] != g_spec.sg_cmap[mid][1] ||
+          g_spec.sg_cmap[mid][1] != g_spec.sg_cmap[mid][2]);
+    TEST_END();
+}
+
 static void test_specgram_pixels_ramp(void)
 {
     TEST_BEGIN("specgram_pixels_ramp");
-    static const u8 ramp_lo[3] = { SPECGRAM_COL_LO };
-    static const u8 ramp_hi[3] = { SPECGRAM_COL_HI };
     static u8 px[SPECGRAM_COLS * 4];
+    /* Same knee quantisation as spectrum_specgram_pixels; amplitudes are
+     * derived from it so the checks hold for any configured knee. */
+    i32 knee_q = (i32)(SPECGRAM_ALPHA_KNEE * 255.0f);
+    i32 faint  = knee_q / 4;
+    i32 mid    = knee_q / 2;
+    i32 above  = knee_q + 2;
+    if (above > 255) { above = 255; }
 
-    /* Below-threshold cells use the pink history ramp with quadratic alpha. */
-    spectrum_specgram_clear(&g_spec);
-    g_spec.sg_amp[20][0] = 0;     /* silence           */
-    g_spec.sg_amp[20][1] = 128;   /* mid               */
-    g_spec.sg_amp[20][2] = 200;   /* loud, not yet hot */
+    /* Non-hot cells sample the cubehelix LUT; alpha is a smoothstep that
+     * saturates to fully opaque at the knee. */
+    spectrum_init_lut(&g_spec, 44100.0f);   /* builds sg_cmap, clears grid */
+    g_spec.sg_amp[20][0] = 0;           /* silence          */
+    g_spec.sg_amp[20][1] = (u8)faint;   /* faint            */
+    g_spec.sg_amp[20][2] = (u8)mid;     /* mid, below knee  */
+    g_spec.sg_amp[20][3] = (u8)above;   /* just above knee  */
     spectrum_specgram_pixels(&g_spec, 20, px);
 
-    /* Silence: low-ramp colour, fully transparent. */
-    CHECK(px[0] == ramp_lo[0] && px[1] == ramp_lo[1] && px[2] == ramp_lo[2]);
+    /* Silence: fully transparent (colour is the map's black end, unseen). */
     CHECK(px[3] == 0);
-    /* Mid amplitude: every colour channel strictly between the ramp ends;
-     * alpha below the linear midpoint (quadratic fade). */
-    CHECK(px[4] > ramp_lo[0] && px[4] < ramp_hi[0]);
-    CHECK(px[5] > ramp_lo[1] && px[5] < ramp_hi[1]);
-    CHECK(px[6] > ramp_lo[2] && px[6] < ramp_hi[2]);
-    CHECK(px[7] > 0 && px[7] < 128);
-    /* Louder (still below threshold): higher alpha than mid. */
+    /* Cells carry the LUT colour for their amplitude. */
+    CHECK(px[4] == g_spec.sg_cmap[faint][0] &&
+          px[5] == g_spec.sg_cmap[faint][1] &&
+          px[6] == g_spec.sg_cmap[faint][2]);
+    CHECK(px[8]  == g_spec.sg_cmap[mid][0] &&
+          px[9]  == g_spec.sg_cmap[mid][1] &&
+          px[10] == g_spec.sg_cmap[mid][2]);
+    /* Below the knee alpha is partial and rises with amplitude; at/above
+     * the knee it saturates at the SPECGRAM_ALPHA_MAX cap (same rounding as
+     * the source: smoothstep = 1 there). */
+    u8 amax = (u8)(1.0f * (SPECGRAM_ALPHA_MAX * 255.0f) + 0.5f);
+    CHECK(px[7] > 0 && px[7] < amax);
     CHECK(px[11] > px[7]);
+    CHECK(px[11] < amax);
+    CHECK(px[15] == amax);
     TEST_END();
 }
 
 static void test_specgram_pixels_hot(void)
 {
     TEST_BEGIN("specgram_pixels_hot");
-    static const u8 ramp_hi[3] = { SPECGRAM_COL_HI };
     static const u8 col_hot[3] = { SPECGRAM_COL_HOT };
     static u8 px[SPECGRAM_COLS * 4];
     static u8 px_out[SPECGRAM_COLS * 4];
@@ -728,7 +775,8 @@ static void test_specgram_pixels_hot(void)
                           * 255.0f + 0.5f);
 
     /* After clear the head is row 0; rows 0..SPECGRAM_HOT_ROWS-1 form the
-     * hot-eligible zone. */
+     * hot-eligible zone (a depth of 0 disables hot highlighting entirely —
+     * the checks below adapt to the configured depth). */
     spectrum_specgram_clear(&g_spec);
     CHECK(g_spec.sg_head == 0);
     g_spec.sg_amp[0][0] = (u8)(hot_q - 1);   /* just below threshold */
@@ -736,21 +784,42 @@ static void test_specgram_pixels_hot(void)
     g_spec.sg_amp[0][2] = 255;               /* full scale           */
     spectrum_specgram_pixels(&g_spec, 0, px);
 
-    /* Just below threshold: still the pink ramp, not the hot colour. */
-    CHECK(px[1] != col_hot[1]);
-    /* At threshold, in zone: flat hot colour, LINEAR alpha (== amplitude). */
-    CHECK(px[4] == col_hot[0] && px[5] == col_hot[1] && px[6] == col_hot[2]);
-    CHECK(px[7] == hot_q);
-    /* Full scale, in zone: hot colour, fully opaque. */
-    CHECK(px[8] == col_hot[0] && px[9] == col_hot[1] && px[10] == col_hot[2]);
-    CHECK(px[11] == 255);
+    /* Just below threshold: always the colormap, never the hot colour. */
+    CHECK(px[0] == g_spec.sg_cmap[hot_q - 1][0] &&
+          px[1] == g_spec.sg_cmap[hot_q - 1][1] &&
+          px[2] == g_spec.sg_cmap[hot_q - 1][2]);
 
-    /* The same full-scale amplitude OUTSIDE the zone stays on the ramp. */
+    /* Alpha values mirror the source: both branches scale by the
+     * SPECGRAM_ALPHA_MAX cap. */
+    u8 amax  = (u8)(1.0f * (SPECGRAM_ALPHA_MAX * 255.0f) + 0.5f);
+    u8 hot_a = (u8)((f32)hot_q / 255.0f * (SPECGRAM_ALPHA_MAX * 255.0f) + 0.5f);
+
+    if (SPECGRAM_HOT_ROWS > 0) {
+        /* At threshold, in zone: flat hot colour, linear capped alpha. */
+        CHECK(px[4] == col_hot[0] && px[5] == col_hot[1] && px[6] == col_hot[2]);
+        CHECK(px[7] == hot_a);
+        /* Full scale, in zone: hot colour at the opacity cap. */
+        CHECK(px[8] == col_hot[0] && px[9] == col_hot[1] && px[10] == col_hot[2]);
+        CHECK(px[11] == amax);
+    } else {
+        /* Hot disabled: even at/above threshold the colormap applies. */
+        CHECK(px[4] == g_spec.sg_cmap[hot_q][0] &&
+              px[5] == g_spec.sg_cmap[hot_q][1] &&
+              px[6] == g_spec.sg_cmap[hot_q][2]);
+        CHECK(px[8] == g_spec.sg_cmap[255][0] &&
+              px[9] == g_spec.sg_cmap[255][1] &&
+              px[10] == g_spec.sg_cmap[255][2]);
+        CHECK(px[11] == amax);
+    }
+
+    /* The same full-scale amplitude OUTSIDE the zone uses the colormap
+     * (cubehelix full scale = white) at the opacity cap. */
     g_spec.sg_amp[SPECGRAM_HOT_ROWS][0] = 255;
     spectrum_specgram_pixels(&g_spec, SPECGRAM_HOT_ROWS, px_out);
-    CHECK(px_out[0] == ramp_hi[0] && px_out[1] == ramp_hi[1] &&
-          px_out[2] == ramp_hi[2]);
-    CHECK(px_out[3] == 255);
+    CHECK(px_out[0] == g_spec.sg_cmap[255][0] &&
+          px_out[1] == g_spec.sg_cmap[255][1] &&
+          px_out[2] == g_spec.sg_cmap[255][2]);
+    CHECK(px_out[3] == amax);
     TEST_END();
 }
 
@@ -802,6 +871,7 @@ void run_spectrum_tests(void)
     test_specgram_dirty_accumulates();
     test_specgram_break();
     test_specgram_clear_and_init();
+    test_specgram_cmap();
     test_specgram_pixels_ramp();
     test_specgram_pixels_hot();
 

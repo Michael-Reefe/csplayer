@@ -91,6 +91,9 @@ typedef struct {
     f32 sg_acc;     /* seconds accumulated toward the next row advance    */
     i32 sg_dirty;   /* rows at/behind sg_head needing texture re-upload,
                      * saturating at SPECGRAM_ROWS                        */
+    /* Cubehelix colour LUT indexed by quantised amplitude; built by
+     * spectrum_init_lut from the SPECGRAM_CH_* parameters in types.h. */
+    u8  sg_cmap[SPECGRAM_CMAP_N][3];
 } spectrum_t;
 
 /* ── Public interface ────────────────────────────────────────────────────── */
@@ -181,13 +184,16 @@ void spectrum_update_specgram(spectrum_t *s, const fft_t *f, f32 dt);
 
 /*
  * Convert ring row `row` to SPECGRAM_COLS RGBA32 pixels (4 bytes each,
- * R,G,B,A byte order — endian-safe).  RGB ramps SPECGRAM_COL_LO →
- * SPECGRAM_COL_HI with amplitude; alpha rises quadratically so silence is
- * fully transparent.  Within the newest SPECGRAM_HOT_ROWS rows, cells at or
- * above the SPECGRAM_HOT_DB threshold render as flat SPECGRAM_COL_HOT with
- * LINEAR alpha instead, so the most prominent frequencies flash bright at
- * the top of the waterfall and settle into the ramp as they scroll out of
- * the zone (the update/break dirty rules always cover the demoted rows).
+ * R,G,B,A byte order — endian-safe).  RGB comes from the cubehelix LUT
+ * (sg_cmap) indexed by amplitude; alpha is a smoothstep rising from fully
+ * transparent at amplitude 0 to the SPECGRAM_ALPHA_MAX cap at
+ * SPECGRAM_ALPHA_KNEE (and above) — the faint (black) end of the map blends
+ * into the panel, and the cap keeps the spectrum line legible on top.
+ * Within the newest SPECGRAM_HOT_ROWS rows, cells at or above the
+ * SPECGRAM_HOT_DB threshold render as flat SPECGRAM_COL_HOT with LINEAR
+ * alpha instead, so the most prominent frequencies flash bright at the top
+ * of the waterfall and settle into the colormap as they scroll out of the
+ * zone (the update/break dirty rules always cover the demoted rows).
  */
 void spectrum_specgram_pixels(const spectrum_t *s, i32 row, u8 *dst);
 

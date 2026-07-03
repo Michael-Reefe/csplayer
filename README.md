@@ -4,7 +4,8 @@ A lightweight audio player program that shows you the spectrum of your audio in 
 
 The frequency plot can also overlay a **scrolling spectrogram** (waterfall):
 the newest spectrum is drawn at the top and the image slides downward, showing
-the last 5 seconds of audio with amplitude mapped to a purple→pink color ramp
+the last 5 seconds of audio with amplitude mapped to the cubehelix colormap
+(fading to transparent at the faint end so silence blends into the panel)
 behind the live spectrum line; the most prominent frequencies flash bright
 yellow as they enter at the top, and seeking leaves a visible break in the
 waterfall.  Toggle it

@@ -158,18 +158,31 @@ typedef enum {
  * merely uneven by a pixel, never misaligned. */
 #define SPECGRAM_ROWS      (SPEC_H / 2)   /* ring rows (2 logical px per row) */
 #define SPECGRAM_COLS      (SPEC_W / 2)   /* columns (~2 logical px per col)  */
-#define SPECGRAM_WINDOW_S  2.0f * ((f32)SPECGRAM_ROWS / (f32)TARGET_FPS)      /* seconds of history spanning the plot */
+/* Seconds of history spanning the plot: one ring row per two rendered
+ * frames, so the scroll rate is tied to TARGET_FPS. */
+#define SPECGRAM_WINDOW_S  (2.0f * ((f32)SPECGRAM_ROWS / (f32)TARGET_FPS))
 #define SPECGRAM_ROW_S     (SPECGRAM_WINDOW_S / (f32)SPECGRAM_ROWS)
 /* "Spectrogram" toggle: bottom-left interior of the freq subplot.  The y
  * coordinate is computed at runtime (the freq plot rect differs between
  * Spec and Both modes); x matches the Deconstruct button column. */
 #define SPECGRAM_BTN_X     (SPEC_X + 2)
 #define SPECGRAM_BTN_W     96   /* "Spectrogram" = 11 chars × 8 px + padding */
-/* Amplitude color ramp (contrasts the blue spectrum line drawn on top):
- * deep purple at low amplitude → hot pink at full scale.  Alpha rises as t²
- * so quiet content fades into the panel background. */
-#define SPECGRAM_COL_LO    60,  10,  70   /* R, G, B at amplitude 0 */
-#define SPECGRAM_COL_HI   255,  60, 200   /* R, G, B at amplitude 1 */
+/* Amplitude colormap: cubehelix (D.A. Green 2011, Bull. Astron. Soc. India
+ * 39, 289) — a helix around the grey diagonal whose perceived brightness
+ * rises monotonically from black (amplitude 0) to white (full scale).  The
+ * faint end still fades to transparent so silence blends into the panel
+ * background rather than rendering as solid black. */
+#define SPECGRAM_CMAP_N    256     /* LUT entries (one per quantised level) */
+#define SPECGRAM_CH_START  0.5f    /* start direction (R = 1, G = 2, B = 3) */
+#define SPECGRAM_CH_ROT   (-1.5f)  /* helix rotations over the full ramp    */
+#define SPECGRAM_CH_HUE    1.0f    /* saturation of the helix               */
+#define SPECGRAM_CH_GAMMA  1.0f    /* lightness gamma                       */
+/* Alpha ramp: smoothstep from transparent at amplitude 0 up to the cap at
+ * SPECGRAM_ALPHA_KNEE, clamped there above it — soft at both ends, with
+ * everything past the knee shown at full strength.  The cap stays below
+ * 100% so the blue spectrum line keeps contrast over bright regions. */
+#define SPECGRAM_ALPHA_KNEE  0.5f   /* amplitude fraction where alpha caps */
+#define SPECGRAM_ALPHA_MAX   0.5f   /* opacity ceiling of the waterfall    */
 /* Cells at or above SPECGRAM_HOT_DB *within the newest SPECGRAM_HOT_ROWS
  * rows* render in the flat bright "hot" colour with LINEAR alpha, so the
  * most prominent frequencies flash yellow at the top of the waterfall and
