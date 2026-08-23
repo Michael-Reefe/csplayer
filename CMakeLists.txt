@@ -209,6 +209,38 @@ if(ENABLE_STEMS)
         target_compile_options(libnyquist PRIVATE -include intrin.h)
     endif()
 
+    # libnyquist bundles its own FLAC, ogg, vorbis, opus, wavpack and musepack,
+    # but demucs.cpp does a directory-scope include_directories(OpenMP includes)
+    # before adding it.  On a machine where that resolves to a shared prefix
+    # (Homebrew puts omp.h in /opt/homebrew/include), every system header there
+    # lands *ahead* of the vendored copies, so e.g. <FLAC/format.h> picks up a
+    # modern libFLAC whose FLAC__Subframe changed .data from a pointer to a
+    # union — and the vendored 1.3-era sources no longer compile.
+    #
+    # Two fixes, either sufficient alone:
+    #   1. Drop the OpenMP include path from libnyquist.  It does not use
+    #      OpenMP, so that entry is purely collateral damage.
+    #   2. Prepend the vendored roots, so nothing on the system can outrank
+    #      them even if another stray include path appears later.
+    if(TARGET libnyquist)
+        get_target_property(_nyq_inc libnyquist INCLUDE_DIRECTORIES)
+        if(_nyq_inc AND OpenMP_CXX_INCLUDE_DIRS)
+            list(REMOVE_ITEM _nyq_inc ${OpenMP_CXX_INCLUDE_DIRS})
+            set_target_properties(libnyquist PROPERTIES
+                                  INCLUDE_DIRECTORIES "${_nyq_inc}")
+        endif()
+
+        set(_nyq "${demucscpp_SOURCE_DIR}/vendor/libnyquist/third_party")
+        target_include_directories(libnyquist BEFORE PRIVATE
+            "${_nyq}"
+            "${_nyq}/FLAC/src/include"
+            "${_nyq}/libogg/include"
+            "${_nyq}/libvorbis/include"
+            "${_nyq}/opus/libopus/include"
+            "${_nyq}/wavpack/include"
+            "${_nyq}/musepack/include")
+    endif()
+
     # The engine uses OpenMP and C++, which MinGW links dynamically by default:
     # the bare executable needs libgomp-1.dll, libstdc++-6.dll and
     # libgcc_s_seh-1.dll beside it and will not even start without them.  A
