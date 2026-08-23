@@ -133,6 +133,26 @@ if(ENABLE_STEMS)
     endif()
 
     if(APPLE)
+        # demucs.cpp's CMakeLists opens with a wholesale
+        #     set(CMAKE_CXX_FLAGS "-Wall -Wextra")
+        # which discards everything CMake had put there — including the
+        # "-isysroot <SDK>" that Apple Clang needs to locate libc++.  The result
+        # is every C++ file failing with "'cmath' file not found" while the C
+        # targets build fine.  Re-inject the sysroot as a directory *property*:
+        # add_compile_options survives, because the subproject only overwrites
+        # the variable.  Harmless when the flag is already present — a repeated
+        # -isysroot with the same value is a no-op.
+        if(CMAKE_OSX_SYSROOT)
+            add_compile_options("-isysroot" "${CMAKE_OSX_SYSROOT}")
+            message(STATUS "csplayer: pinning sysroot for demucs.cpp: ${CMAKE_OSX_SYSROOT}")
+        else()
+            message(WARNING
+                "CMAKE_OSX_SYSROOT is empty, so the C++ standard library may not "
+                "be found when building the separation engine.  Check that the "
+                "command line tools are installed and 'xcrun --show-sdk-path' "
+                "resolves, or build with -DENABLE_STEMS=OFF.")
+        endif()
+
         # Apple Clang ships no OpenMP runtime, and demucs.cpp requires one.
         # Point CMake at the Homebrew copy if the caller has not already.
         if(NOT DEFINED OpenMP_ROOT)
