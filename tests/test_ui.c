@@ -10,14 +10,19 @@
  *
  * Layout constants (mirrored from ui.c private #defines):
  *   VOL_X = 4 + 3*BTN_SZ + 2*BTN_GAP + 4 = 72
- *   VOL_W = 36,  VOL_Y = CTRL_Y+3 = 275,  VOL_H = 18   (CTRL_Y=272)
+ *   VOL_W = 36,  VOL_Y = CTRL_Y+3 = 339,  VOL_H = 18   (CTRL_Y=336)
  *   SEEK_X = VOL_X+VOL_W+4 = 112
- *   SEEK_Y = CTRL_Y+2 = 274,  SEEK_W = LOG_W-SEEK_X-4 = 396,  SEEK_H = 20
- *   PL_SB_X = LOG_W-5 = 507,  PL_SB_W = 5               (PL_Y=202)
- *   PL_DEL_X = PL_SB_X-12-2 = 493,  PL_DEL_W = 12
+ *   SEEK_Y = CTRL_Y+2 = 338,  SEEK_W = LOG_W-SEEK_X-4 = 524,  SEEK_H = 20
+ *   PL_SB_X = LOG_W-5 = 635,  PL_SB_W = 5               (PL_Y=242)
+ *   PL_DEL_X = PL_SB_X-12-2 = 621,  PL_DEL_W = 12
  *   PL_ADD_X = 2,  PL_ADD_SZ = PL_ROW-2 = 14
- *   GBTN_X0 = SPEC_X+SPEC_W-3*GRAPH_BTN_W-2*GRAPH_BTN_GAP-2 = 376
- *   GBTN_Y  = SPEC_Y+2 = 30,  each button 38×10 px, gap=2
+ *
+ * Graph toolbar (public in types.h, so tests alias rather than mirror it):
+ *   GBAR_BTN_Y = 31,  mode buttons right-aligned from GBAR_R_X = 406,
+ *   each 52×10 px with a 2 px gap;  Spectrogram at 42, Deconstruct at 156.
+ *   Button widths allow for the parenthesised shortcut letter in each label
+ *   ("(S)pec", "Spectro(g)ram").
+ *   The plot region below it is PLOT_Y = 44, PLOT_H = 176.
  */
 
 #include <SDL3/SDL.h>
@@ -55,9 +60,11 @@
 #define T_PL_DEL_X  (T_PL_SB_X - T_PL_DEL_W - 2)        /* 493 */
 #define T_PL_ADD_X  PL_ADD_X                              /* 2   */
 #define T_PL_ADD_SZ PL_ADD_SZ                             /* 14  */
-/* Graph-mode toggle button strip (top-right interior of spectrum panel). */
-#define T_GBTN_X0  (SPEC_X + SPEC_W - 3*GRAPH_BTN_W - 2*GRAPH_BTN_GAP - 2)  /* 376 */
-#define T_GBTN_BY  (SPEC_Y + 2)                                               /* 30  */
+/* Graph-mode selector strip.  Unlike the constants above, the toolbar geometry
+ * is public in types.h, so these alias it rather than duplicating the maths —
+ * a layout change cannot leave the tests testing stale coordinates. */
+#define T_GBTN_X0  GBAR_R_X      /* 406 */
+#define T_GBTN_BY  GBAR_BTN_Y    /*  31 */
 
 /* ── Globals ─────────────────────────────────────────────────────────────── */
 
@@ -102,6 +109,27 @@ static audio_t dummy_audio(void)
     SDL_memset(&a, 0, sizeof(a));
     a.sample_rate = 44100.0f;
     return a;
+}
+
+/* Idle stems state: no cache, nothing running, every stem enabled.  Most UI
+ * tests do not exercise the stems view and just need a valid struct. */
+static stems_t g_stems_idle;
+
+static void init_stems_fixtures(void)
+{
+    SDL_memset(&g_stems_idle, 0, sizeof(g_stems_idle));
+    for (i32 i = 0; i < STEM_COUNT; i++) { g_stems_idle.enabled[i] = true; }
+}
+
+/* Stems state with a ready cache, so the grid and its mute boxes are live. */
+static stems_t make_stems(stems_status_t st)
+{
+    stems_t s;
+    SDL_memset(&s, 0, sizeof(s));
+    for (i32 i = 0; i < STEM_COUNT; i++) { s.enabled[i] = true; }
+    s.status = st;
+    (void)SDL_strlcpy(s.cache_dir, "/tmp/stems/abc/", sizeof(s.cache_dir));
+    return s;
 }
 
 /* Playlist with N synthetic tracks (no real files). */
@@ -225,7 +253,7 @@ static void test_ui_mouse_down_non_left(void)
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
     SDL_MouseButtonEvent e = make_btn(10.0f, 270.0f, SDL_BUTTON_RIGHT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_NONE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle) == UI_ACTION_NONE);
     CHECK(!ui.vol_dragging);
     TEST_END();
 }
@@ -237,7 +265,7 @@ static void test_ui_mouse_down_rewind_btn(void)
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
     SDL_MouseButtonEvent e = make_btn(10.0f, (f32)(CTRL_Y + 4), SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_REWIND);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle) == UI_ACTION_REWIND);
     CHECK(!ui.vol_dragging);
     TEST_END();
 }
@@ -249,7 +277,7 @@ static void test_ui_mouse_down_play_btn(void)
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
     SDL_MouseButtonEvent e = make_btn(30.0f, (f32)(CTRL_Y + 4), SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_PLAY_PAUSE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle) == UI_ACTION_PLAY_PAUSE);
     CHECK(!ui.vol_dragging);
     TEST_END();
 }
@@ -261,7 +289,7 @@ static void test_ui_mouse_down_next_btn(void)
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
     SDL_MouseButtonEvent e = make_btn(55.0f, (f32)(CTRL_Y + 4), SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_NEXT);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle) == UI_ACTION_NEXT);
     CHECK(!ui.vol_dragging);
     TEST_END();
 }
@@ -275,7 +303,7 @@ static void test_ui_mouse_down_add_open(void)
     playlist_t pl = make_pl(0, -1);
     /* Click inside the [+] button area with dialog not yet open. */
     SDL_MouseButtonEvent e = make_btn(5.0f, (f32)(PL_Y + 4), SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_OPEN_DIALOG);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle) == UI_ACTION_OPEN_DIALOG);
     CHECK(!ui.dialog_open);
     TEST_END();
 }
@@ -289,7 +317,7 @@ static void test_ui_mouse_down_add_blocked(void)
     playlist_t pl = make_pl(0, -1);   /* empty playlist so no row click */
     SDL_MouseButtonEvent e = make_btn(5.0f, (f32)(PL_Y + 4), SDL_BUTTON_LEFT);
     /* dialog_open=true → add button check fails; no rows → NONE */
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_NONE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle) == UI_ACTION_NONE);
     CHECK(ui.dialog_open);
     TEST_END();
 }
@@ -302,7 +330,7 @@ static void test_ui_mouse_down_vol_slider(void)
     playlist_t pl = make_pl(0, -1);
     /* x=85 is inside vol slider [VOL_X=72, VOL_X+VOL_W=108). */
     SDL_MouseButtonEvent e = make_btn(85.0f, (f32)T_VOL_Y + 2.0f, SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
     CHECK(act == UI_ACTION_SET_VOLUME);
     CHECK(ui.vol_dragging);
     CHECK(ui.vol_pos > 0.0f && ui.vol_pos < 1.0f);
@@ -319,7 +347,7 @@ static void test_ui_mouse_down_vol_clamp_lo(void)
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
     SDL_MouseButtonEvent e = make_btn((f32)T_VOL_X, (f32)T_VOL_Y + 2.0f, SDL_BUTTON_LEFT);
-    ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+    ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
     CHECK(ui.vol_pos >= 0.0f);
     CHECK(!ui.sb_dragging);
     TEST_END();
@@ -332,7 +360,7 @@ static void test_ui_mouse_down_seek_bar(void)
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
     SDL_MouseButtonEvent e = make_btn(200.0f, (f32)T_SEEK_Y + 2.0f, SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
     CHECK(act == UI_ACTION_SEEK);
     CHECK(ui.scrubbing);
     CHECK(ui.scrub_pos > 0.0f && ui.scrub_pos < 1.0f);
@@ -348,7 +376,7 @@ static void test_ui_mouse_down_scrollbar(void)
     playlist_t pl = make_pl(8, 0);
     /* x=637 is in [PL_SB_X=635, 640), y=260 is in [PL_Y=242, 338). */
     SDL_MouseButtonEvent e = make_btn(637.0f, 260.0f, SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
     CHECK(act == UI_ACTION_NONE);
     CHECK(ui.sb_dragging);
     TEST_END();
@@ -362,7 +390,7 @@ static void test_ui_mouse_down_scrollbar_nospace(void)
     /* count=3 <= visible=4 → max_scroll<=0 → sb_pos_to_scroll returns 0 */
     playlist_t pl = make_pl(3, 0);
     SDL_MouseButtonEvent e = make_btn(637.0f, 260.0f, SDL_BUTTON_LEFT);
-    ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+    ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
     CHECK(pl.scroll == 0);
     CHECK(ui.sb_dragging);
     TEST_END();
@@ -376,7 +404,7 @@ static void test_ui_mouse_down_pl_delete(void)
     playlist_t pl = make_pl(2, 0);
     /* x=625 is in delete column [PL_DEL_X=621, 633); y maps to row 0. */
     SDL_MouseButtonEvent e = make_btn(625.0f, (f32)(PL_Y + 4), SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
     CHECK(act == UI_ACTION_PL_REMOVE);
     CHECK(ui.pl_hover == 0);
     TEST_END();
@@ -390,7 +418,7 @@ static void test_ui_mouse_down_pl_row(void)
     playlist_t pl = make_pl(2, 0);
     /* x=100 is in title area (not delete col); y maps to row 0. */
     SDL_MouseButtonEvent e = make_btn(100.0f, (f32)(PL_Y + 4), SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
     CHECK(act == UI_ACTION_PL_SELECT);
     CHECK(ui.pl_hover == 0);
     TEST_END();
@@ -404,7 +432,7 @@ static void test_ui_mouse_down_nowhere(void)
     playlist_t pl = make_pl(0, -1);
     /* Click in the header area — no region matches. */
     SDL_MouseButtonEvent e = make_btn(200.0f, 5.0f, SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_NONE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle) == UI_ACTION_NONE);
     CHECK(!ui.vol_dragging);
     TEST_END();
 }
@@ -860,7 +888,7 @@ static spectrum_t make_flat_spectrum(void)
     SDL_memset(&s, 0, sizeof(s));
     for (i32 i = 0; i < SPEC_W; i++) {
         s.pts[i].x = (f32)(SPEC_X + i);
-        s.pts[i].y = (f32)(SPEC_Y + SPEC_H / 2);
+        s.pts[i].y = (f32)(PLOT_Y + PLOT_H / 2);
     }
     return s;
 }
@@ -874,7 +902,7 @@ static void test_ui_draw_status_playing(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -885,7 +913,7 @@ static void test_ui_draw_status_paused(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -896,7 +924,7 @@ static void test_ui_draw_status_stopped(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -909,7 +937,7 @@ static void test_ui_draw_scrubbing(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.scrubbing  = true;
     ui.scrub_pos  = 0.5f;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -924,7 +952,7 @@ static void test_ui_draw_vol_clamp_lo(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     /* vol_pos < 0 → vfill < 0 → clamped to 0 */
     ui.vol_pos = -0.1f;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -936,7 +964,7 @@ static void test_ui_draw_vol_clamp_hi(void)
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.vol_pos = 1.1f;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -949,7 +977,7 @@ static void test_ui_draw_seek_clamp_lo(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.scrubbing = true;
     ui.scrub_pos = -0.1f;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -962,7 +990,7 @@ static void test_ui_draw_seek_clamp_hi(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.scrubbing = true;
     ui.scrub_pos = 1.1f;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -975,7 +1003,7 @@ static void test_ui_draw_no_current_track(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(0, -1);   /* current=-1 → no title branch */
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -986,7 +1014,7 @@ static void test_ui_draw_with_current_track(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(2, 0);   /* current=0 → title + clip branch */
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -999,7 +1027,7 @@ static void test_ui_draw_empty_playlist(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1010,7 +1038,7 @@ static void test_ui_draw_full_playlist(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(8, 0);   /* count>visible → scrollbar drawn */
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1022,7 +1050,7 @@ static void test_ui_draw_thumb_min(void)
     /* very large count → thumb_h < 4 → clamped to 4 */
     playlist_t pl = make_pl(PLAYLIST_MAX, 0);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1035,7 +1063,7 @@ static void test_ui_draw_hover_row(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     /* pl_hover=1, current=0 → hover highlight branch (idx==hover && idx!=current) */
     ui.pl_hover = 1;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1046,7 +1074,7 @@ static void test_ui_draw_current_row(void)
     spectrum_t s = make_flat_spectrum();
     playlist_t pl = make_pl(3, 1);   /* current=1 → ">" indicator branch */
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1059,7 +1087,7 @@ static void test_ui_draw_hover_equals_current(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     /* pl_hover==current → first if true, second if false */
     ui.pl_hover = 0;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1071,7 +1099,7 @@ static void test_ui_draw_duration_positive(void)
     playlist_t pl = make_pl(1, 0);
     pl.entries[0].duration_sec = 90.0;   /* > 0 → duration rendered */
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1083,7 +1111,7 @@ static void test_ui_draw_duration_zero(void)
     playlist_t pl = make_pl(1, 0);
     pl.entries[0].duration_sec = 0.0;   /* <= 0 → no duration rendered */
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1095,7 +1123,7 @@ static void test_ui_draw_dialog_open(void)
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.dialog_open = true;   /* add button drawn hot */
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1110,7 +1138,7 @@ static void test_ui_draw_empty_string(void)
     playlist_t pl = make_pl(1, 0);
     pl.entries[0].title[0] = '\0';
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1122,7 +1150,7 @@ static void test_ui_draw_font_null(void)
     playlist_t pl = make_pl(1, 0);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.font = NULL;   /* → SDL_RenderDebugText fallback */
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1145,7 +1173,7 @@ static void test_ui_draw_ttf_render_fail(void)
 
     /* Mock makes TTF_RenderText_Solid return NULL → render_utf8 silently skips. */
     g_mock_TTF_RenderText_Solid_fail = true;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
 
     TTF_CloseFont(font);
     TEST_END();
@@ -1169,7 +1197,7 @@ static void test_ui_draw_ttf_texture_fail(void)
 
     /* Mock makes SDL_CreateTextureFromSurface return NULL → silent skip. */
     g_mock_SDL_CreateTextureFromSurface_fail = true;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
 
     TTF_CloseFont(font);
     TEST_END();
@@ -1190,7 +1218,7 @@ static void test_ui_draw_font_valid(void)
     playlist_t pl = make_pl(1, 0);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.font = font;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
 
     TTF_CloseFont(font);
     TEST_END();
@@ -1206,7 +1234,7 @@ static void test_ui_mode_toggle_click(void)
     playlist_t pl = make_pl(0, -1);
     /* Mode button is now at MODE_BTN_X=78, w=96, so centre is x=126. */
     SDL_MouseButtonEvent e = make_btn(120.0f, 10.0f, SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_MODE_TOGGLE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle) == UI_ACTION_MODE_TOGGLE);
     CHECK(!ui.vol_dragging);
     TEST_END();
 }
@@ -1221,7 +1249,7 @@ static void test_ui_synth_inst_row_click(void)
     /* Synth inst row: y in [PL_Y, PL_Y+16) = [194, 210).
      * Now opens the dropdown → returns NONE, sets synth_inst_open. */
     SDL_MouseButtonEvent e = make_btn(100.0f, (f32)(PL_Y + 4), SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_NONE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH, &g_stems_idle) == UI_ACTION_NONE);
     CHECK(ui.synth_inst_open);
     TEST_END();
 }
@@ -1236,7 +1264,7 @@ static void test_ui_synth_note_row_click(void)
     /* Synth note row: y in [PL_Y+16, PL_Y+32) = [210, 226).
      * Now opens the dropdown → returns NONE, sets synth_note_open. */
     SDL_MouseButtonEvent e = make_btn(100.0f, (f32)(PL_Y + 18), SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_NONE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH, &g_stems_idle) == UI_ACTION_NONE);
     CHECK(ui.synth_note_open);
     TEST_END();
 }
@@ -1249,7 +1277,7 @@ static void test_ui_synth_panel_empty_area(void)
     playlist_t pl = make_pl(0, -1);
     /* Area below note row (y=PL_Y+40) has no button — returns NONE. */
     SDL_MouseButtonEvent e = make_btn(100.0f, (f32)(PL_Y + 40), SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_NONE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH, &g_stems_idle) == UI_ACTION_NONE);
     CHECK(!ui.synth_inst_open);
     TEST_END();
 }
@@ -1265,7 +1293,7 @@ static void test_ui_synth_dd_sb_drag_start(void)
     /* x=633 is in [LOG_W-4-DD_SB_W=631, LOG_W-4=636) — scrollbar strip.
      * y=DD_INST_Y+8 is inside the dropdown rect. */
     SDL_MouseButtonEvent e = make_btn(633.0f, (f32)(PL_Y + 16 + 8), SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_NONE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH, &g_stems_idle) == UI_ACTION_NONE);
     CHECK(ui.synth_dd_sb_dragging);
     CHECK(ui.synth_inst_open);   /* dropdown stays open during scroll drag */
     TEST_END();
@@ -1310,7 +1338,7 @@ static void test_ui_synth_dropdown_select_inst(void)
     /* Click row 0 of inst dropdown (DD_INST_Y = PL_Y+16 = 210, row_h=16).
      * Item area: x in [4, LOG_W-4-DD_SB_W) = [4, 503). */
     SDL_MouseButtonEvent e = make_btn(100.0f, (f32)(PL_Y + 16 + 4), SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH, &g_stems_idle);
     CHECK(act == UI_ACTION_SYNTH_INST_SET);
     CHECK(ui.synth_dd_select == 5);   /* scroll=5, row=0 → item=5 */
     CHECK(!ui.synth_inst_open);
@@ -1327,7 +1355,7 @@ static void test_ui_synth_dropdown_close_outside(void)
     playlist_t pl = make_pl(0, -1);
     /* Click in spectrum area (x=10, y=100) — outside dropdown AND mode button. */
     SDL_MouseButtonEvent e = make_btn(10.0f, 100.0f, SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_NONE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH, &g_stems_idle) == UI_ACTION_NONE);
     CHECK(!ui.synth_inst_open);
     TEST_END();
 }
@@ -1442,7 +1470,7 @@ static void test_ui_draw_mode_btn_synth(void)
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     /* mode=SYNTH → "SYN" label on mode button, synth panel shown */
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1454,7 +1482,7 @@ static void test_ui_draw_synth_playing(void)
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.synth_playing = true;   /* HOLD button drawn hot */
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1466,7 +1494,7 @@ static void test_ui_draw_synth_not_playing(void)
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.synth_playing = false;  /* HOLD button drawn normal */
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1481,7 +1509,7 @@ static void test_ui_draw_synth_all_instruments(void)
     i32 insts[] = {0, 63, 127};
     for (i32 i = 0; i < 3; i++) {
         ui.synth_inst = insts[i];
-        ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+        ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth, &g_stems_idle);
     }
     TEST_END();
 }
@@ -1497,7 +1525,7 @@ static void test_ui_draw_synth_all_notes(void)
     i32 notes[] = {0, 64, 127};
     for (i32 i = 0; i < 3; i++) {
         ui.synth_note = notes[i];
-        ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+        ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth, &g_stems_idle);
     }
     TEST_END();
 }
@@ -1513,7 +1541,7 @@ static void test_ui_draw_synth_inst_dropdown(void)
     ui.synth_inst      = 10;
     ui.synth_inst_open = true;
     ui.synth_dd_scroll = 8;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1528,7 +1556,7 @@ static void test_ui_draw_synth_note_dropdown(void)
     ui.synth_note      = 69;
     ui.synth_note_open = true;
     ui.synth_dd_scroll = 65;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1540,7 +1568,7 @@ static void test_ui_draw_header_artist(void)
     playlist_t pl = make_pl(1, 0);
     SDL_strlcpy(pl.entries[0].artist, "Test Artist", (size_t)TITLE_MAX_LEN);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1553,7 +1581,7 @@ static void test_ui_draw_header_synth_no_title(void)
     playlist_t pl = make_pl(1, 0);
     SDL_strlcpy(pl.entries[0].artist, "SomeArtist", (size_t)TITLE_MAX_LEN);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1571,7 +1599,7 @@ static void test_graph_btn_center_each(void)
         ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
         f32 cx = (f32)(T_GBTN_X0 + b * (GRAPH_BTN_W + GRAPH_BTN_GAP) + GRAPH_BTN_W / 2);
         SDL_MouseButtonEvent e = make_btn(cx, cy, SDL_BUTTON_LEFT);
-        ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+        ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
         CHECK(act == UI_ACTION_GRAPH_MODE);
         CHECK((i32)ui.graph_mode == expected_modes[b]);
     }
@@ -1589,7 +1617,7 @@ static void test_graph_btn_wrong_idx(void)
     f32 cx = (f32)(T_GBTN_X0 + GRAPH_BTN_W / 2);
     f32 cy = (f32)(T_GBTN_BY + GRAPH_BTN_H / 2);
     SDL_MouseButtonEvent e = make_btn(cx, cy, SDL_BUTTON_LEFT);
-    ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+    ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
     CHECK(ui.graph_mode == GRAPH_MODE_FREQ);
     CHECK(ui.graph_mode != GRAPH_MODE_TIME);
     TEST_END();
@@ -1602,9 +1630,9 @@ static void test_graph_btn_outside(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
-    /* y=200 is far below the button strip at y=[SPEC_Y+2, SPEC_Y+12). */
+    /* y=200 is far below the toolbar strip at y=[GBAR_BTN_Y, +GRAPH_BTN_H). */
     SDL_MouseButtonEvent e = make_btn((f32)(T_GBTN_X0 + 19), 200.0f, SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
     CHECK(act != UI_ACTION_GRAPH_MODE);
     CHECK(ui.graph_mode == GRAPH_MODE_FREQ);
     TEST_END();
@@ -1621,7 +1649,7 @@ static void test_graph_btn_between(void)
     f32 gap_x = (f32)(T_GBTN_X0 + GRAPH_BTN_W + 1);   /* middle of 2-px gap */
     f32 cy    = (f32)(T_GBTN_BY + GRAPH_BTN_H / 2);
     SDL_MouseButtonEvent e = make_btn(gap_x, cy, SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
     CHECK(act != UI_ACTION_GRAPH_MODE);
     CHECK(ui.graph_mode == GRAPH_MODE_FREQ);
     TEST_END();
@@ -1637,7 +1665,7 @@ static void test_graph_click_freq(void)
     f32 cx = (f32)(T_GBTN_X0 + GRAPH_BTN_W / 2);
     f32 cy = (f32)(T_GBTN_BY + GRAPH_BTN_H / 2);
     SDL_MouseButtonEvent e = make_btn(cx, cy, SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_GRAPH_MODE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle) == UI_ACTION_GRAPH_MODE);
     CHECK(ui.graph_mode == GRAPH_MODE_FREQ);
     TEST_END();
 }
@@ -1651,7 +1679,7 @@ static void test_graph_click_wave(void)
     f32 cx = (f32)(T_GBTN_X0 + (GRAPH_BTN_W + GRAPH_BTN_GAP) + GRAPH_BTN_W / 2);
     f32 cy = (f32)(T_GBTN_BY + GRAPH_BTN_H / 2);
     SDL_MouseButtonEvent e = make_btn(cx, cy, SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_GRAPH_MODE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle) == UI_ACTION_GRAPH_MODE);
     CHECK(ui.graph_mode == GRAPH_MODE_TIME);
     TEST_END();
 }
@@ -1665,7 +1693,7 @@ static void test_graph_click_both(void)
     f32 cx = (f32)(T_GBTN_X0 + 2*(GRAPH_BTN_W + GRAPH_BTN_GAP) + GRAPH_BTN_W / 2);
     f32 cy = (f32)(T_GBTN_BY + GRAPH_BTN_H / 2);
     SDL_MouseButtonEvent e = make_btn(cx, cy, SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER) == UI_ACTION_GRAPH_MODE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle) == UI_ACTION_GRAPH_MODE);
     CHECK(ui.graph_mode == GRAPH_MODE_BOTH);
     TEST_END();
 }
@@ -1680,7 +1708,7 @@ static void test_graph_click_synth_mode(void)
     f32 cx = (f32)(T_GBTN_X0 + (GRAPH_BTN_W + GRAPH_BTN_GAP) + GRAPH_BTN_W / 2);
     f32 cy = (f32)(T_GBTN_BY + GRAPH_BTN_H / 2);
     SDL_MouseButtonEvent e = make_btn(cx, cy, SDL_BUTTON_LEFT);
-    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH) == UI_ACTION_GRAPH_MODE);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_SYNTH, &g_stems_idle) == UI_ACTION_GRAPH_MODE);
     CHECK(ui.graph_mode == GRAPH_MODE_TIME);
     TEST_END();
 }
@@ -1695,7 +1723,7 @@ static void test_ui_draw_freq_player(void)
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.graph_mode = GRAPH_MODE_FREQ;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1707,7 +1735,7 @@ static void test_ui_draw_freq_synth(void)
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.graph_mode = GRAPH_MODE_FREQ;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1719,7 +1747,7 @@ static void test_ui_draw_time_player(void)
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.graph_mode = GRAPH_MODE_TIME;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1731,7 +1759,7 @@ static void test_ui_draw_time_synth(void)
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.graph_mode = GRAPH_MODE_TIME;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1743,7 +1771,7 @@ static void test_ui_draw_both_player(void)
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.graph_mode = GRAPH_MODE_BOTH;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1755,7 +1783,7 @@ static void test_ui_draw_both_synth(void)
     playlist_t pl = make_pl(0, -1);
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     ui.graph_mode = GRAPH_MODE_BOTH;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_SYNTH, &g_synth, &g_stems_idle);
     TEST_END();
 }
 
@@ -1769,14 +1797,13 @@ static void test_ui_specgram_btn_freq(void)
     ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
-    /* FREQ mode: button at the bottom-left of the full panel. */
+    /* FREQ mode: the toolbar Spectrogram slot is applicable and toggles. */
     SDL_MouseButtonEvent e =
-        make_btn((f32)(SPECGRAM_BTN_X + 4),
-                 (f32)(SPEC_Y + SPEC_H - GRAPH_BTN_H - 2 + 4), SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+        make_btn((f32)(SPECGRAM_BTN_X + 4), (f32)(GBAR_BTN_Y + 4), SDL_BUTTON_LEFT);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
     CHECK(act == UI_ACTION_SPECGRAM);
     CHECK(ui.specgram_on);
-    act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+    act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
     CHECK(act == UI_ACTION_SPECGRAM);
     CHECK(!ui.specgram_on);
     TEST_END();
@@ -1789,20 +1816,18 @@ static void test_ui_specgram_btn_both(void)
     ui.graph_mode = GRAPH_MODE_BOTH;
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
-    /* BOTH mode: the button sits at the bottom of the top-half freq subplot. */
+    /* BOTH mode: both overlay toggles are applicable and occupy adjacent
+     * toolbar slots, so each click must reach exactly one of them. */
     SDL_MouseButtonEvent e =
-        make_btn((f32)(SPECGRAM_BTN_X + 4),
-                 (f32)(SPEC_Y + SPEC_H / 2 - GRAPH_BTN_H - 2 + 4),
-                 SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+        make_btn((f32)(SPECGRAM_BTN_X + 4), (f32)(GBAR_BTN_Y + 4), SDL_BUTTON_LEFT);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
     CHECK(act == UI_ACTION_SPECGRAM);
     CHECK(ui.specgram_on);
-    /* The panel-bottom slot belongs to Deconstruct in BOTH mode. */
     SDL_MouseButtonEvent e2 =
-        make_btn((f32)(SPECGRAM_BTN_X + 4),
-                 (f32)(SPEC_Y + SPEC_H - GRAPH_BTN_H - 2 + 4), SDL_BUTTON_LEFT);
-    act = ui_on_mouse_down(&ui, &e2, &a, &pl, APP_MODE_PLAYER);
+        make_btn((f32)(DECOMP_BTN_X + 4), (f32)(GBAR_BTN_Y + 4), SDL_BUTTON_LEFT);
+    act = ui_on_mouse_down(&ui, &e2, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
     CHECK(act == UI_ACTION_WAVE_DECOMPOSE);
+    CHECK(ui.wave_decompose);
     CHECK(ui.specgram_on);   /* untouched by the Deconstruct click */
     TEST_END();
 }
@@ -1814,14 +1839,193 @@ static void test_ui_specgram_btn_time_mode(void)
     ui.graph_mode = GRAPH_MODE_TIME;
     audio_t a = dummy_audio();
     playlist_t pl = make_pl(0, -1);
-    /* TIME mode hides the spectrogram button; its BOTH-mode spot is empty. */
+    /* TIME mode has no freq subplot, so the Spectrogram slot is drawn dimmed
+     * and must ignore clicks — its geometry still exists, but it is inert. */
     SDL_MouseButtonEvent e =
-        make_btn((f32)(SPECGRAM_BTN_X + 4),
-                 (f32)(SPEC_Y + SPEC_H / 2 - GRAPH_BTN_H - 2 + 4),
-                 SDL_BUTTON_LEFT);
-    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER);
+        make_btn((f32)(SPECGRAM_BTN_X + 4), (f32)(GBAR_BTN_Y + 4), SDL_BUTTON_LEFT);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
     CHECK(act == UI_ACTION_NONE);
     CHECK(!ui.specgram_on);
+    TEST_END();
+}
+
+static void test_ui_decomp_btn_inert_in_freq(void)
+{
+    TEST_BEGIN("ui_decomp_btn_inert_in_freq");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));   /* GRAPH_MODE_FREQ */
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    /* FREQ mode has no time subplot, so Deconstruct is dimmed and inert. */
+    SDL_MouseButtonEvent e =
+        make_btn((f32)(DECOMP_BTN_X + 4), (f32)(GBAR_BTN_Y + 4), SDL_BUTTON_LEFT);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle);
+    CHECK(act == UI_ACTION_NONE);
+    CHECK(!ui.wave_decompose);
+    TEST_END();
+}
+
+/* The toolbar must never overlap the plot region — that separation is the
+ * whole point of having a toolbar, and a constant change must not undo it. */
+static void test_ui_toolbar_clears_plot(void)
+{
+    TEST_BEGIN("ui_toolbar_clears_plot");
+    CHECK(GBAR_BTN_Y + GRAPH_BTN_H <= PLOT_Y);
+    CHECK(PLOT_Y + PLOT_H == SPEC_Y + SPEC_H);
+    /* Left and right button groups must not collide. */
+    CHECK(DECOMP_BTN_X + DECOMP_BTN_W < GBAR_R_X);
+    /* Right group must stay inside the panel. */
+    CHECK(GBAR_R_X + (i32)GRAPH_MODE_COUNT * GRAPH_BTN_W
+          + ((i32)GRAPH_MODE_COUNT - 1) * GRAPH_BTN_GAP <= SPEC_X + SPEC_W);
+    TEST_END();
+}
+
+/* ── Instrument-stem view ────────────────────────────────────────────────── */
+
+/* Centre of stem cell idx's mute checkbox. */
+static void stem_cb_center(i32 idx, f32 *cx, f32 *cy)
+{
+    i32 x = SPEC_X + (idx % STEM_COLS) * STEM_W + 2;
+    i32 y = PLOT_Y + (idx / STEM_COLS) * STEM_H + 2;
+    *cx = (f32)(x + STEM_CB_SZ / 2);
+    *cy = (f32)(y + STEM_CB_SZ / 2);
+}
+
+static void test_ui_stem_button_selects_mode(void)
+{
+    TEST_BEGIN("ui_stem_button_selects_mode");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    /* The Stems selector is the fourth (last) button in the right group. */
+    i32 b  = (i32)GRAPH_MODE_STEMS;
+    f32 cx = (f32)(GBAR_R_X + b * (GRAPH_BTN_W + GRAPH_BTN_GAP) + GRAPH_BTN_W / 2);
+    f32 cy = (f32)(GBAR_BTN_Y + GRAPH_BTN_H / 2);
+    SDL_MouseButtonEvent e = make_btn(cx, cy, SDL_BUTTON_LEFT);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &g_stems_idle)
+          == UI_ACTION_GRAPH_MODE);
+    CHECK(ui.graph_mode == GRAPH_MODE_STEMS);
+    TEST_END();
+}
+
+static void test_ui_key_stems_mode(void)
+{
+    TEST_BEGIN("ui_key_stems_mode");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    /* T, not S: S already selects the spectrum view (see the "S(t)em" label). */
+    SDL_KeyboardEvent e = make_key(SDL_SCANCODE_T);
+    CHECK(ui_on_key(&ui, &e, APP_MODE_PLAYER) == UI_ACTION_GRAPH_MODE);
+    CHECK(ui.graph_mode == GRAPH_MODE_STEMS);
+    TEST_END();
+}
+
+static void test_ui_stem_checkbox_all_cells(void)
+{
+    TEST_BEGIN("ui_stem_checkbox_all_cells");
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    stems_t st = make_stems(STEMS_READY);
+
+    /* Every one of the six boxes must resolve to its own stem index. */
+    for (i32 i = 0; i < STEM_COUNT; i++) {
+        ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+        ui.graph_mode = GRAPH_MODE_STEMS;
+        ui.stem_hover = -1;
+        f32 cx, cy;
+        stem_cb_center(i, &cx, &cy);
+        SDL_MouseButtonEvent e = make_btn(cx, cy, SDL_BUTTON_LEFT);
+        CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &st)
+              == UI_ACTION_STEM_TOGGLE);
+        CHECK(ui.stem_hover == i);
+    }
+    TEST_END();
+}
+
+static void test_ui_stem_checkbox_miss(void)
+{
+    TEST_BEGIN("ui_stem_checkbox_miss");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.graph_mode = GRAPH_MODE_STEMS;
+    ui.stem_hover = -1;
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    stems_t st = make_stems(STEMS_READY);
+
+    /* Cell interior, well clear of the top-left checkbox. */
+    f32 cx = (f32)(SPEC_X + STEM_W / 2);
+    f32 cy = (f32)(PLOT_Y + STEM_H / 2);
+    SDL_MouseButtonEvent e = make_btn(cx, cy, SDL_BUTTON_LEFT);
+    CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &st)
+          == UI_ACTION_NONE);
+    CHECK(ui.stem_hover == -1);
+    TEST_END();
+}
+
+static void test_ui_stem_action_button_per_status(void)
+{
+    TEST_BEGIN("ui_stem_action_button_per_status");
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    f32 cx = (f32)(STEM_ACT_X + STEM_ACT_W / 2);
+    f32 cy = (f32)(STEM_ACT_Y + STEM_ACT_H / 2);
+    SDL_MouseButtonEvent e = make_btn(cx, cy, SDL_BUTTON_LEFT);
+
+    /* IDLE → Separate, FAILED → Retry (same action), RUNNING → Cancel. */
+    struct { stems_status_t st; ui_action_t want; } cases[3] = {
+        { STEMS_IDLE,    UI_ACTION_STEMS_BEGIN  },
+        { STEMS_FAILED,  UI_ACTION_STEMS_BEGIN  },
+        { STEMS_RUNNING, UI_ACTION_STEMS_CANCEL },
+    };
+    for (i32 i = 0; i < 3; i++) {
+        ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+        ui.graph_mode = GRAPH_MODE_STEMS;
+        stems_t st = make_stems(cases[i].st);
+        CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &st)
+              == cases[i].want);
+    }
+    TEST_END();
+}
+
+static void test_ui_stem_action_inert_when_ready(void)
+{
+    TEST_BEGIN("ui_stem_action_inert_when_ready");
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.graph_mode = GRAPH_MODE_STEMS;
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    stems_t st = make_stems(STEMS_READY);
+
+    /* Once the grid is up, the action button's rect belongs to the plot again
+     * and must not fire a second separation. */
+    SDL_MouseButtonEvent e = make_btn((f32)(STEM_ACT_X + STEM_ACT_W / 2),
+                                      (f32)(STEM_ACT_Y + STEM_ACT_H / 2),
+                                      SDL_BUTTON_LEFT);
+    ui_action_t act = ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &st);
+    CHECK(act != UI_ACTION_STEMS_BEGIN);
+    CHECK(act != UI_ACTION_STEMS_CANCEL);
+    TEST_END();
+}
+
+static void test_ui_stem_boxes_inert_in_other_modes(void)
+{
+    TEST_BEGIN("ui_stem_boxes_inert_in_other_modes");
+    audio_t a = dummy_audio();
+    playlist_t pl = make_pl(0, -1);
+    stems_t st = make_stems(STEMS_READY);
+    f32 cx, cy;
+    stem_cb_center(0, &cx, &cy);
+    SDL_MouseButtonEvent e = make_btn(cx, cy, SDL_BUTTON_LEFT);
+
+    /* The grid only exists in the stems view; the same point in Wave mode is
+     * plot area and must not toggle a stem. */
+    static const graph_mode_t others[3] = {
+        GRAPH_MODE_FREQ, GRAPH_MODE_TIME, GRAPH_MODE_BOTH
+    };
+    for (i32 i = 0; i < 3; i++) {
+        ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+        ui.graph_mode = others[i];
+        CHECK(ui_on_mouse_down(&ui, &e, &a, &pl, APP_MODE_PLAYER, &st)
+              != UI_ACTION_STEM_TOGGLE);
+    }
     TEST_END();
 }
 
@@ -1850,12 +2054,12 @@ static void test_ui_draw_specgram_freq(void)
     s.sg_head  = SPECGRAM_ROWS / 2;
     s.sg_dirty = 3;
     s.sg_amp[s.sg_head][0] = 255;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     CHECK(ui.specgram_tex != NULL);
     CHECK(s.sg_dirty == 0);
     /* Second draw: nothing dirty, head at 0 → single-piece render path. */
     s.sg_head = 0;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     CHECK(s.sg_dirty == 0);
     SDL_DestroyTexture(ui.specgram_tex);   /* test-local ui_t owns it */
     TEST_END();
@@ -1872,7 +2076,7 @@ static void test_ui_draw_specgram_both(void)
     ui.graph_mode  = GRAPH_MODE_BOTH;
     s.sg_head  = 1;                  /* two pieces, minimal second piece */
     s.sg_dirty = SPECGRAM_ROWS;      /* full re-upload path (post-clear)  */
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     CHECK(ui.specgram_tex != NULL);
     CHECK(s.sg_dirty == 0);
     SDL_DestroyTexture(ui.specgram_tex);
@@ -1891,14 +2095,94 @@ static void test_ui_draw_specgram_create_fail(void)
     /* Texture creation fails → draw skips; dirty state stays unconsumed so
      * the upload retries once a texture exists. */
     g_mock_SDL_CreateTexture_fail = true;
-    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth);
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &g_stems_idle);
     CHECK(ui.specgram_tex == NULL);
     CHECK(s.sg_dirty == 1);
     TEST_END();
 }
 
+/* Draw the stems view in each job status, plus the header widget states. */
+static void test_ui_draw_stems_all_statuses(void)
+{
+    TEST_BEGIN("ui_draw_stems_all_statuses");
+    audio_t a     = make_draw_audio(AUDIO_STATUS_PLAYING);
+    spectrum_t s  = make_flat_spectrum();
+    playlist_t pl = make_pl(3, 0);
+
+    static const stems_status_t all[4] = {
+        STEMS_IDLE, STEMS_RUNNING, STEMS_READY, STEMS_FAILED
+    };
+    for (i32 i = 0; i < 4; i++) {
+        ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+        ui.graph_mode = GRAPH_MODE_STEMS;
+        stems_t st = make_stems(all[i]);
+        st.progress = 42;
+        if (all[i] == STEMS_FAILED) {
+            (void)SDL_strlcpy(st.err, "engine failed", sizeof(st.err));
+        }
+        ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &st);
+    }
+    TEST_END();
+}
+
+/* A FAILED status with no message must still render (default text path). */
+static void test_ui_draw_stems_failed_no_message(void)
+{
+    TEST_BEGIN("ui_draw_stems_failed_no_message");
+    audio_t a     = make_draw_audio(AUDIO_STATUS_STOPPED);
+    spectrum_t s  = make_flat_spectrum();
+    playlist_t pl = make_pl(0, -1);
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.graph_mode = GRAPH_MODE_STEMS;
+    stems_t st = make_stems(STEMS_FAILED);
+    st.err[0] = '\0';
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &st);
+    TEST_END();
+}
+
+/* Muted stems take the dimmed-grey line path instead of their own colour. */
+static void test_ui_draw_stems_muted(void)
+{
+    TEST_BEGIN("ui_draw_stems_muted");
+    audio_t a     = make_draw_audio(AUDIO_STATUS_PLAYING);
+    spectrum_t s  = make_flat_spectrum();
+    playlist_t pl = make_pl(1, 0);
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+    ui.graph_mode = GRAPH_MODE_STEMS;
+    stems_t st = make_stems(STEMS_READY);
+    /* Alternate so both the enabled and muted branches run in one pass. */
+    for (i32 i = 0; i < STEM_COUNT; i++) { st.enabled[i] = (i % 2 == 0); }
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &st);
+    TEST_END();
+}
+
+/* The header progress bar and the "Stems ready" badge share the title strip. */
+static void test_ui_draw_stem_header_widget(void)
+{
+    TEST_BEGIN("ui_draw_stem_header_widget");
+    audio_t a     = make_draw_audio(AUDIO_STATUS_PLAYING);
+    spectrum_t s  = make_flat_spectrum();
+    playlist_t pl = make_pl(3, 1);
+    ui_t ui;   SDL_memset(&ui, 0, sizeof(ui));
+
+    /* Running: bar at each end of its range plus a mid value. */
+    static const i32 pcts[3] = { 0, 55, 100 };
+    for (i32 i = 0; i < 3; i++) {
+        stems_t st = make_stems(STEMS_RUNNING);
+        st.progress = pcts[i];
+        ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &st);
+    }
+    /* Completed but unseen: badge instead of bar. */
+    stems_t done = make_stems(STEMS_READY);
+    done.notify = true;
+    ui_draw(g_renderer, &a, &s, &pl, &ui, APP_MODE_PLAYER, &g_synth, &done);
+    TEST_END();
+}
+
 void run_ui_tests(void)
 {
+    init_stems_fixtures();
+
     /* Create an offscreen window + software renderer for draw smoke tests. */
     g_window = SDL_CreateWindow("csplayer_tests", PHYS_W, PHYS_H,
                                 SDL_WINDOW_HIDDEN);
@@ -2004,6 +2288,15 @@ void run_ui_tests(void)
     test_ui_specgram_btn_freq();
     test_ui_specgram_btn_both();
     test_ui_specgram_btn_time_mode();
+    test_ui_decomp_btn_inert_in_freq();
+    test_ui_toolbar_clears_plot();
+    test_ui_stem_button_selects_mode();
+    test_ui_key_stems_mode();
+    test_ui_stem_checkbox_all_cells();
+    test_ui_stem_checkbox_miss();
+    test_ui_stem_action_button_per_status();
+    test_ui_stem_action_inert_when_ready();
+    test_ui_stem_boxes_inert_in_other_modes();
     test_ui_key_specgram_toggle();
 
     /* ── Draw smoke tests (require renderer) ── */
@@ -2050,6 +2343,10 @@ void run_ui_tests(void)
         test_ui_draw_specgram_freq();
         test_ui_draw_specgram_both();
         test_ui_draw_specgram_create_fail();
+        test_ui_draw_stems_all_statuses();
+        test_ui_draw_stems_failed_no_message();
+        test_ui_draw_stems_muted();
+        test_ui_draw_stem_header_widget();
     }
 
     TTF_Quit();

@@ -112,13 +112,18 @@ bool playlist_init(playlist_t *pl)
     SDL_memset(pl, 0, sizeof(*pl));
     pl->current = -1;
 
+    /* NOTE: the only heap traffic in the project, and a documented exception to
+     * NASA Rule 3.  SDL_GetPrefPath allocates its result and requires the caller
+     * to release it; it runs once at startup, the value is copied straight into
+     * fixed storage, and the allocation is freed before this function returns,
+     * so nothing heap-allocated outlives initialisation. */
     char *pref = SDL_GetPrefPath(CSPLAYER_ORG, CSPLAYER_APP_NAME);
     if (pref == NULL) {
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "playlist_init: SDL_GetPrefPath failed: %s", SDL_GetError());
         return false;
     }
-    SDL_strlcpy(pl->pref_path, pref, (size_t)PATH_MAX_LEN);
+    (void)SDL_strlcpy(pl->pref_path, pref, (size_t)PATH_MAX_LEN);
     SDL_free(pref);
     return true;
 }
@@ -141,7 +146,7 @@ bool playlist_load(playlist_t *pl)
     if (io == NULL) { return true; }   /* missing file = empty playlist, not an error */
     char probe;
     bool empty = (SDL_ReadIO(io, &probe, 1) == 0);
-    SDL_CloseIO(io);
+    (void)SDL_CloseIO(io);
     if (empty) { return true; }
 
     FILE *f = fopen(filepath, "r");

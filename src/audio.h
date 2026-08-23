@@ -31,7 +31,15 @@ typedef enum {
 
 /* ── Module state ────────────────────────────────────────────────────────── */
 
+/* Userdata for the per-stem capture callback: one instance per stem, so the
+ * shared callback can tell which ring buffer it is filling. */
+typedef struct audio_s audio_t;
 typedef struct {
+    audio_t *a;
+    i32      idx;
+} stem_cb_ud_t;
+
+struct audio_s {
     MIX_Mixer  *mixer;
     MIX_Track  *track;
     MIX_Audio  *audio;           /* currently loaded MIX_Audio object  */
@@ -40,6 +48,20 @@ typedef struct {
     SDL_Mutex  *ring_mutex;
     f32         ring[RING_SIZE]; /* mono PCM samples, circular          */
     i32         ring_write;      /* next write position (audio thread)  */
+
+    /* ── Instrument-stem playback ───────────────────────────────────────────
+     * When stems_active, six tracks play the cached stems instead of the single
+     * `track` above.  They are tagged STEMS_TAG and started with MIX_PlayTag,
+     * which guarantees all tagged tracks begin at the same mixing instant, so
+     * they stay sample-locked.  Muting is a per-track gain of 0 — the mixer's
+     * raw callback still runs, so a muted stem keeps its display.
+     * stem_track[0] is the reference for position, duration and end-of-track. */
+    bool          stems_active;
+    MIX_Track    *stem_track[STEM_COUNT];
+    MIX_Audio    *stem_audio[STEM_COUNT];
+    f32           stem_ring[STEM_COUNT][RING_SIZE];
+    i32           stem_ring_write[STEM_COUNT];
+    stem_cb_ud_t  stem_cb_ud[STEM_COUNT];
 
     /* Format info captured from the PCM callback spec. */
     f32         sample_rate;
@@ -54,7 +76,7 @@ typedef struct {
     /* User event type registered by main.c; pushed when a track ends.
      * Set by main.c before calling audio_load (can remain 0 if unused). */
     u32         event_track_done;
-} audio_t;
+};
 
 /* ── Public interface ────────────────────────────────────────────────────── */
 
@@ -135,6 +157,45 @@ bool audio_play_looped(audio_t *a);
  * intact.  Safe to call when nothing is loaded.
  */
 void audio_unload(audio_t *a);
+
+/* ── Instrument-stem playback ────────────────────────────────────────────── */
+
+/*
+ * Load STEM_COUNT stem files and switch to stem playback.  paths must hold
+ * STEM_COUNT valid filesystem paths in stem order.  Unloads any single-track
+ * audio first, creates the six tracks (once; reused across tracks afterwards),
+ * tags them STEMS_TAG, and registers the per-stem capture callbacks.  Every
+ * stem starts enabled.  Returns false and unloads cleanly on any failure.
+ *
+ * Duration, position and the end-of-track callback come from stem 0.
+ */
+bool audio_load_stems(audio_t *a, const char *const *paths);
+
+/*
+ * Begin synchronized playback of all six stems via MIX_PlayTag.
+ * Returns true on success; status becomes AUDIO_STATUS_PLAYING.
+ */
+bool audio_play_stems(audio_t *a);
+
+/*
+ * Mute or unmute one stem in the live mix by setting its track gain.
+ * idx must be in [0, STEM_COUNT).  Silently ignores calls when stems are not
+ * loaded.  The stem's ring buffer keeps filling either way.
+ */
+void audio_set_stem_enabled(audio_t *a, i32 idx, bool on);
+
+/*
+ * Copy the most recent RING_SIZE mono samples of stem idx (oldest first) into
+ * dst, which must hold at least RING_SIZE floats.  Thread-safe.  Writes
+ * silence if stems are not loaded or idx is out of range.
+ */
+void audio_snapshot_stem_ring(audio_t *a, i32 idx, f32 *dst);
+
+/*
+ * Stop and release the stem tracks, returning to single-track playback.
+ * Safe to call when no stems are loaded.
+ */
+void audio_unload_stems(audio_t *a);
 
 /*
  * Tear down SDL3_mixer.  Safe to call even if audio_init was not completed.

@@ -13,6 +13,8 @@
 #include <SDL3_mixer/SDL_mixer.h>
 #include <SDL3_ttf/SDL_ttf.h>
 
+#include "types.h"   /* STEM_ENGINE_EXE / STEM_MODEL_FILE for the tools stub */
+
 /* ── Fail-next flags (definitions) ──────────────────────────────────────── */
 
 bool g_mock_MIX_Init_fail                        = false;
@@ -34,6 +36,27 @@ bool g_mock_SDL_CreateTextureFromSurface_fail    = false;
 bool g_mock_SDL_CreateTexture_fail               = false;
 bool g_mock_MIX_LoadRawAudioNoCopy_fail          = false;
 bool g_mock_MIX_SetTrackRawCallback_fail         = false;
+bool g_mock_MIX_CreateAudioDecoder_fail          = false;
+bool g_mock_MIX_TagTrack_fail                    = false;
+bool g_mock_MIX_PlayTag_fail                     = false;
+bool g_mock_SDL_CreateDirectory_fail             = false;
+bool g_mock_SDL_CreateProcess_fail               = false;
+
+/* Sticky mode flags — see the note in test_mocks.h. */
+bool g_mock_process_fake      = false;
+bool g_mock_process_exited    = false;
+int  g_mock_process_exitcode  = 0;
+bool g_mock_stems_skip_tools  = false;
+bool g_mock_stems_engine_only = false;
+bool g_mock_SDL_GetBasePath_null = false;
+
+/*
+ * Sentinel handle handed out in place of a real child process.  Its address is
+ * unique, so the wait/kill/destroy stubs can tell a faked job from a real one
+ * and must never pass this pointer to SDL.
+ */
+static int s_fake_proc_token;
+#define FAKE_PROC ((SDL_Process *)&s_fake_proc_token)
 
 /* ── Stub implementations ────────────────────────────────────────────────── */
 
@@ -213,4 +236,127 @@ bool csp_mock_MIX_SetTrackRawCallback(MIX_Track *track,
         return false;
     }
     return MIX_SetTrackRawCallback(track, cb, userdata);
+}
+
+MIX_AudioDecoder *csp_mock_MIX_CreateAudioDecoder(const char *path,
+                                                   SDL_PropertiesID props)
+{
+    if (g_mock_MIX_CreateAudioDecoder_fail) {
+        g_mock_MIX_CreateAudioDecoder_fail = false;
+        return NULL;
+    }
+    return MIX_CreateAudioDecoder(path, props);
+}
+
+bool csp_mock_MIX_TagTrack(MIX_Track *track, const char *tag)
+{
+    if (g_mock_MIX_TagTrack_fail) {
+        g_mock_MIX_TagTrack_fail = false;
+        return false;
+    }
+    return MIX_TagTrack(track, tag);
+}
+
+bool csp_mock_MIX_PlayTag(MIX_Mixer *mixer, const char *tag,
+                           SDL_PropertiesID options)
+{
+    if (g_mock_MIX_PlayTag_fail) {
+        g_mock_MIX_PlayTag_fail = false;
+        return false;
+    }
+    return MIX_PlayTag(mixer, tag, options);
+}
+
+/* ── Filesystem / process stubs ──────────────────────────────────────────── */
+
+bool csp_mock_SDL_CreateDirectory(const char *path)
+{
+    if (g_mock_SDL_CreateDirectory_fail) {
+        g_mock_SDL_CreateDirectory_fail = false;
+        return false;
+    }
+    return SDL_CreateDirectory(path);
+}
+
+bool csp_mock_SDL_GetPathInfo(const char *path, SDL_PathInfo *info)
+{
+    /* Pretend the sidecar assets exist, so a job can be started in a tree
+     * without them while every other stat still hits the real disk.  With
+     * engine_only the model stays "missing", which is how a user who has not
+     * downloaded the weights sees it. */
+    bool fake_engine = (g_mock_stems_skip_tools || g_mock_stems_engine_only);
+    if (path != NULL &&
+        ((fake_engine             && SDL_strstr(path, STEM_ENGINE_EXE) != NULL) ||
+         (g_mock_stems_skip_tools && SDL_strstr(path, STEM_MODEL_FILE) != NULL))) {
+        if (info != NULL) {
+            SDL_memset(info, 0, sizeof(*info));
+            info->type = SDL_PATHTYPE_FILE;
+            info->size = 1;
+        }
+        return true;
+    }
+    return SDL_GetPathInfo(path, info);
+}
+
+SDL_Process *csp_mock_SDL_CreateProcessWithProperties(SDL_PropertiesID props)
+{
+    if (g_mock_SDL_CreateProcess_fail) {
+        g_mock_SDL_CreateProcess_fail = false;
+        return NULL;
+    }
+    if (g_mock_process_fake) { return FAKE_PROC; }
+    return SDL_CreateProcessWithProperties(props);
+}
+
+/* Staged stdout for the fake child, exposed as a single consume-once stream so
+ * it behaves like the real pipe (a second drain finds nothing). */
+static SDL_IOStream *s_fake_out;
+
+void csp_mock_stage_process_output(const char *text)
+{
+    if (s_fake_out != NULL) {
+        (void)SDL_CloseIO(s_fake_out);
+        s_fake_out = NULL;
+    }
+    if (text != NULL) {
+        s_fake_out = SDL_IOFromConstMem(text, SDL_strlen(text));
+    }
+}
+
+const char *csp_mock_SDL_GetBasePath(void)
+{
+    if (g_mock_SDL_GetBasePath_null) {
+        g_mock_SDL_GetBasePath_null = false;
+        return NULL;
+    }
+    return SDL_GetBasePath();
+}
+
+SDL_IOStream *csp_mock_SDL_GetProcessOutput(SDL_Process *process)
+{
+    if (process == FAKE_PROC) { return s_fake_out; }
+    return SDL_GetProcessOutput(process);
+}
+
+bool csp_mock_SDL_WaitProcess(SDL_Process *process, bool block, int *exitcode)
+{
+    if (process == FAKE_PROC) {
+        if (exitcode != NULL) { *exitcode = g_mock_process_exitcode; }
+        /* A blocking wait on a fake child returns immediately (it is already
+         * "reaped"); a poll reports whatever the test has staged. */
+        return block ? true : g_mock_process_exited;
+    }
+    return SDL_WaitProcess(process, block, exitcode);
+}
+
+bool csp_mock_SDL_KillProcess(SDL_Process *process, bool force)
+{
+    if (process == FAKE_PROC) { return true; }
+    return SDL_KillProcess(process, force);
+}
+
+void csp_mock_SDL_DestroyProcess(SDL_Process *process)
+{
+    if (process == FAKE_PROC) { return; }
+    SDL_DestroyProcess(process);
 }

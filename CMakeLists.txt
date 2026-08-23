@@ -1,14 +1,25 @@
 cmake_minimum_required(VERSION 3.26)
-project(csplayer C)
+# CXX is enabled for the stem-separation sidecar (demucs.cpp), which is a
+# separate executable — csplayer.exe itself stays pure C and links nothing
+# from it.  Enabling the language unconditionally keeps the generated build
+# identical whether or not ENABLE_STEMS is on.
+project(csplayer C CXX)
 
 # ── Language standard ────────────────────────────────────────────────────────
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ── Build options ────────────────────────────────────────────────────────────
 option(ENABLE_ASAN  "Enable AddressSanitizer and debug symbols" OFF)
 option(ENABLE_TESTS "Build unit and integration tests"          OFF)
+# The sidecar pulls in demucs.cpp plus its vendored Eigen and libnyquist, which
+# is a large clone and needs an OpenMP runtime.  Turning it OFF still produces a
+# working csplayer: the stems view reports the engine as not installed.
+option(ENABLE_STEMS "Build the Demucs stem-separation sidecar"  ON)
+option(ENABLE_COVERAGE "Instrument the test binary for gcov coverage" OFF)
 enable_testing()
 
 # ── Dependency fetching ───────────────────────────────────────────────────────
@@ -91,6 +102,104 @@ FetchContent_Declare(TinySoundFont
     GIT_SHALLOW    TRUE)
 FetchContent_MakeAvailable(TinySoundFont)
 
+# ── demucs.cpp (Demucs v4 inference, MIT license) ────────────────────────────
+# Instrument-stem separation engine.  Built as its own executable and shipped
+# next to csplayer, which launches it with SDL_CreateProcess — so csplayer
+# links nothing from it and stays pure C with no new dependencies.  All the
+# C++ / Eigen / OpenMP weight is confined to this sidecar binary.
+#
+# Vendored Eigen and libnyquist arrive as git submodules, which FetchContent
+# initialises automatically.  This is a large clone; see ENABLE_STEMS above.
+if(ENABLE_STEMS)
+    if(MINGW)
+        # FindOpenMP prefers libgomp.dll.a (the import stub for libgomp-1.dll)
+        # even when the static libgomp.a sits beside it, and an explicit library
+        # path defeats -static — so the engine would still refuse to start
+        # without MSYS2's DLL.  Ask the compiler where the static archive is and
+        # pin FindOpenMP to it.  Must precede FetchContent_MakeAvailable below,
+        # which is where demucs.cpp runs find_package(OpenMP).
+        execute_process(COMMAND ${CMAKE_CXX_COMPILER} -print-file-name=libgomp.a
+                        OUTPUT_VARIABLE _gomp_static
+                        OUTPUT_STRIP_TRAILING_WHITESPACE
+                        ERROR_QUIET)
+        if(_gomp_static AND EXISTS "${_gomp_static}")
+            set(OpenMP_gomp_LIBRARY "${_gomp_static}" CACHE FILEPATH "" FORCE)
+            message(STATUS "csplayer: static OpenMP runtime ${_gomp_static}")
+        else()
+            message(WARNING
+                "Static libgomp.a not found.  The stem-separation engine will "
+                "need libgomp-1.dll beside it to run.")
+        endif()
+    endif()
+
+    if(APPLE)
+        # Apple Clang ships no OpenMP runtime, and demucs.cpp requires one.
+        # Point CMake at the Homebrew copy if the caller has not already.
+        if(NOT DEFINED OpenMP_ROOT)
+            execute_process(COMMAND brew --prefix libomp
+                            OUTPUT_VARIABLE _brew_libomp
+                            OUTPUT_STRIP_TRAILING_WHITESPACE
+                            ERROR_QUIET)
+            if(_brew_libomp AND EXISTS "${_brew_libomp}")
+                set(OpenMP_ROOT "${_brew_libomp}" CACHE PATH "" FORCE)
+                message(STATUS "csplayer: using libomp from ${_brew_libomp}")
+            else()
+                message(WARNING
+                    "libomp not found.  demucs.cpp needs OpenMP, which Apple Clang\n"
+                    "does not provide.  Install it and reconfigure:\n"
+                    "  brew install libomp\n"
+                    "  cmake -S . -B build -DOpenMP_ROOT=$(brew --prefix libomp)\n"
+                    "Or build without stem separation: -DENABLE_STEMS=OFF")
+            endif()
+        endif()
+    endif()
+
+    # demucs.cpp declares cmake_minimum_required(VERSION 3.0), which CMake 4.x
+    # refuses outright.  This is the escape hatch CMake itself names in the
+    # error; scoped to this block so our own project and the SDL dependencies
+    # keep their real minimums.
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
+    # demucs.cpp defaults USE_OPENBLAS to ON, which would add a BLAS dependency
+    # we do not want to require.  Force the plain Eigen + OpenMP path.
+    set(USE_OPENBLAS OFF CACHE BOOL "" FORCE)
+
+    # The CLI passes a std::filesystem::path where a std::string is expected,
+    # which GCC 15 rejects (see cmake/patch_demucscpp.cmake).  The patch is a
+    # portable CMake script, so no sed or patch binary is needed on either
+    # platform, and it no-ops once upstream fixes this.
+    FetchContent_Declare(demucscpp
+        GIT_REPOSITORY https://github.com/sevagh/demucs.cpp.git
+        GIT_TAG        main
+        GIT_SHALLOW    TRUE
+        PATCH_COMMAND  ${CMAKE_COMMAND} -DSRC=<SOURCE_DIR>
+                       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patch_demucscpp.cmake")
+    FetchContent_MakeAvailable(demucscpp)
+
+    unset(CMAKE_POLICY_VERSION_MINIMUM)
+
+    # libnyquist (vendored by demucs.cpp for audio I/O) bundles WavPack, which
+    # reaches for the MSVC intrinsics _BitScanForward / _BitScanReverse on any
+    # _WIN32 / _WIN64 target without checking which compiler is in use.  MinGW
+    # GCC defines those macros and does provide the intrinsics, but only via
+    # <intrin.h>, which WavPack never includes — so three call sites fail to
+    # compile.  Force-including the header supplies all of them at once and
+    # leaves WavPack's own platform choices untouched.
+    if(TARGET libnyquist AND WIN32 AND NOT MSVC)
+        target_compile_options(libnyquist PRIVATE -include intrin.h)
+    endif()
+
+    # The engine uses OpenMP and C++, which MinGW links dynamically by default:
+    # the bare executable needs libgomp-1.dll, libstdc++-6.dll and
+    # libgcc_s_seh-1.dll beside it and will not even start without them.  A
+    # packaged build must not depend on the developer's MSYS2 install, so link
+    # the runtimes in.  (macOS cannot link fully statically; see the libomp
+    # bundling note in README.md for the equivalent step there.)
+    if(TARGET demucs_mt.cpp.main AND MINGW)
+        target_link_options(demucs_mt.cpp.main PRIVATE -static)
+    endif()
+endif()
+
 # ── Executable ────────────────────────────────────────────────────────────────
 add_executable(csplayer
     src/main.c
@@ -100,7 +209,8 @@ add_executable(csplayer
     src/playlist.c
     src/metadata.c
     src/ui.c
-    src/synth.c)
+    src/synth.c
+    src/stems.c)
 
 target_include_directories(csplayer PRIVATE src ${tinysoundfont_SOURCE_DIR})
 
@@ -126,6 +236,14 @@ else()
         $<$<BOOL:${ENABLE_ASAN}>:-g -fsanitize=address>)
     target_link_options(csplayer PRIVATE
         $<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>)
+endif()
+
+# Static libgcc/libstdc++ on MinGW.  Without this the executable imports
+# libgcc_s_seh-1.dll, so a packaged build only runs on machines that happen to
+# have MSYS2 installed — which defeats the point of statically linking SDL just
+# above.  ASan needs its runtime shared, so the two are mutually exclusive.
+if(MINGW AND NOT ENABLE_ASAN)
+    target_link_options(csplayer PRIVATE -static)
 endif()
 
 # ── Link libraries ────────────────────────────────────────────────────────────
@@ -201,6 +319,48 @@ if(EXISTS "${GM_SF2}")
     endif()
 endif()
 
+# ── Stem separation assets (needed by the stems graph mode) ──────────────────
+# Two pieces travel with the app: the sidecar engine built above, and the
+# converted Demucs weights.  Both land beside the executable (or in the bundle's
+# Resources on macOS), which is where stems.c looks via SDL_GetBasePath.
+# Missing either one is not fatal: the stems view reports it and everything else
+# keeps working.
+set(STEM_MODEL "${CMAKE_SOURCE_DIR}/assets/ggml-model-htdemucs-6s-f16.bin")
+if(ENABLE_STEMS AND NOT EXISTS "${STEM_MODEL}")
+    message(WARNING
+        "assets/ggml-model-htdemucs-6s-f16.bin not found (~53 MB).\n"
+        "Stem separation will report the model as missing until it is present.\n"
+        "Download the pre-converted 6-source weights from\n"
+        "  https://huggingface.co/datasets/Retrobear/demucs.cpp\n"
+        "and save them to assets/ggml-model-htdemucs-6s-f16.bin")
+endif()
+
+if(APPLE)
+    set(CSP_ASSET_DIR "$<TARGET_FILE_DIR:csplayer>/../Resources")
+else()
+    set(CSP_ASSET_DIR "$<TARGET_FILE_DIR:csplayer>")
+endif()
+
+if(ENABLE_STEMS)
+    # A generator expression in a POST_BUILD COMMAND does not create a build
+    # dependency, so without this the copy below can run before the engine has
+    # been linked on a fresh parallel build.
+    add_dependencies(csplayer demucs_mt.cpp.main)
+    add_custom_command(TARGET csplayer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CSP_ASSET_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:demucs_mt.cpp.main>" "${CSP_ASSET_DIR}"
+        VERBATIM
+        COMMENT "Copying stem-separation engine next to csplayer")
+    if(EXISTS "${STEM_MODEL}")
+        add_custom_command(TARGET csplayer POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${STEM_MODEL}" "${CSP_ASSET_DIR}"
+            VERBATIM
+            COMMENT "Copying stem-separation model next to csplayer")
+    endif()
+endif()
+
 # ── macOS: .app bundle properties ─────────────────────────────────────────────
 if(APPLE)
     set_target_properties(csplayer PROPERTIES
@@ -218,6 +378,12 @@ if(WIN32)
     if(EXISTS "${GM_SF2}")
         install(FILES "${GM_SF2}" DESTINATION .)
     endif()
+    if(ENABLE_STEMS)
+        install(PROGRAMS "$<TARGET_FILE:demucs_mt.cpp.main>" DESTINATION .)
+        if(EXISTS "${STEM_MODEL}")
+            install(FILES "${STEM_MODEL}" DESTINATION .)
+        endif()
+    endif()
 elseif(APPLE)
     install(TARGETS csplayer BUNDLE DESTINATION .)
     if(EXISTS "${UNIFONT_OTF}")
@@ -228,10 +394,18 @@ elseif(APPLE)
         install(FILES "${GM_SF2}"
                 DESTINATION csplayer.app/Contents/Resources)
     endif()
+    if(ENABLE_STEMS)
+        install(PROGRAMS "$<TARGET_FILE:demucs_mt.cpp.main>"
+                DESTINATION csplayer.app/Contents/Resources)
+        if(EXISTS "${STEM_MODEL}")
+            install(FILES "${STEM_MODEL}"
+                    DESTINATION csplayer.app/Contents/Resources)
+        endif()
+    endif()
 endif()
 
 set(CPACK_PACKAGE_NAME                "csplayer")
-set(CPACK_PACKAGE_VERSION             "0.4.0")
+set(CPACK_PACKAGE_VERSION             "0.5.0")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Lightweight audio player with real-time spectrum analyser")
 set(CPACK_STRIP_FILES                 TRUE)
 if(WIN32)

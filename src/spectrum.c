@@ -132,13 +132,13 @@ void spectrum_update(spectrum_t *s, const fft_t *f)
         s->smooth_db[x] = SMOOTH_COEFF * s->smooth_db[x]
                           + (1.0f - SMOOTH_COEFF) * db;
 
-        /* Map dB to screen y:  DB_TOP → SPEC_Y (top),  DB_BOT → SPEC_Y + SPEC_H. */
+        /* Map dB to screen y:  DB_TOP → PLOT_Y (top),  DB_BOT → PLOT_Y + PLOT_H. */
         f32 t = (DB_TOP - s->smooth_db[x]) / db_range;
         if (t < 0.0f) { t = 0.0f; }
         if (t > 1.0f) { t = 1.0f; }
 
         s->pts[x].x = (f32)(SPEC_X + x);
-        s->pts[x].y = (f32)SPEC_Y + (f32)SPEC_H * t;
+        s->pts[x].y = (f32)PLOT_Y + (f32)PLOT_H * t;
     }
 }
 
@@ -308,21 +308,30 @@ static void biquad_process(const biquad_t *c, const f32 *src, f32 *dst, i32 n)
     }
 }
 
-/* Fill BAND_W screen points for one band sub-panel from s->band_scratch[].
- * Runs zero-crossing + xcorr alignment against prev_win for stable display.
- * x_offset is 0, BAND_W, or 2*BAND_W for bass, mids, highs respectively. */
-static void fill_band_pts(spectrum_t *s, SDL_FPoint *pts, f32 *smooth,
-                          f32 *prev_win, i32 x_offset,
+/*
+ * Fill `count` screen points for one waveform sub-panel from src[0..n).
+ *
+ * Shared by the band-decomposition and instrument-stem views: both need the
+ * same zero-crossing + cross-correlation trigger alignment that keeps a
+ * repeating waveform phase-locked between frames, differing only in the source
+ * buffer, panel width, and target rect.  src is a caller-owned buffer (the
+ * filter output scratch for bands, a stem's PCM snapshot for stems).
+ *
+ * x_offset shifts the panel horizontally within the spectrum rect.
+ */
+static void fill_wave_pts(const f32 *src, SDL_FPoint *pts, f32 *smooth,
+                          f32 *prev_win, i32 count, i32 x_offset,
                           i32 plot_y, i32 plot_h, i32 win, i32 n,
                           f32 smooth_coeff)
 {
-    assert(s            != NULL);
+    assert(src          != NULL);
     assert(pts          != NULL);
     assert(smooth       != NULL);
     assert(prev_win     != NULL);
     assert(plot_h       >  0);
-    assert(BAND_W       >  0);
+    assert(count        >  0);
     assert(n            >  0);
+    assert(win > 0 && win <= n);
     assert(smooth_coeff >= 0.0f && smooth_coeff < 1.0f);
 
     i32 ss = n - 1 - win;
@@ -331,7 +340,7 @@ static void fill_band_pts(spectrum_t *s, SDL_FPoint *pts, f32 *smooth,
     if (se < 1) { se = 1; }
     i32 trigger = -1;
     for (i32 i = se; i <= ss; i++) {
-        if (s->band_scratch[i - 1] < 0.0f && s->band_scratch[i] >= 0.0f) {
+        if (src[i - 1] < 0.0f && src[i] >= 0.0f) {
             trigger = i;
             break;
         }
@@ -340,16 +349,16 @@ static void fill_band_pts(spectrum_t *s, SDL_FPoint *pts, f32 *smooth,
     if (zc < 0)       { zc = 0; }
     if (zc + win > n) { zc = n - win; }
 
-    i32 start = xcorr_best_start(s->band_scratch, n, win, prev_win, zc, BAND_W);
+    i32 start = xcorr_best_start(src, n, win, prev_win, zc, count);
     if (start < 0)       { start = 0; }
     if (start + win > n) { start = n - win; }
 
     f32 half_h = (f32)plot_h * 0.5f;
-    for (i32 x = 0; x < BAND_W; x++) {
-        i32 src = start + x * win / BAND_W;
-        if (src < 0)  { src = 0; }
-        if (src >= n) { src = n - 1; }
-        f32 raw = s->band_scratch[src];
+    for (i32 x = 0; x < count; x++) {
+        i32 si = start + x * win / count;
+        if (si < 0)  { si = 0; }
+        if (si >= n) { si = n - 1; }
+        f32 raw = src[si];
         if (raw >  1.0f) { raw =  1.0f; }
         if (raw < -1.0f) { raw = -1.0f; }
         prev_win[x] = raw;
@@ -391,17 +400,41 @@ void spectrum_update_bands(spectrum_t *s, const f32 *samples, i32 n,
     }
 
     biquad_process(&s->band_lp_bass, samples, s->band_scratch, n);
-    fill_band_pts(s, s->bass_pts, s->smooth_bass, s->prev_bass,
-                  0, plot_y, plot_h, bass_win, n, BAND_BASS_SMOOTH);
+    fill_wave_pts(s->band_scratch, s->bass_pts, s->smooth_bass, s->prev_bass,
+                  BAND_W, 0, plot_y, plot_h, bass_win, n, BAND_BASS_SMOOTH);
 
     biquad_process(&s->band_hp_bass, samples, s->band_scratch, n);
     biquad_process(&s->band_lp_mids, s->band_scratch, s->band_scratch, n);
-    fill_band_pts(s, s->mid_pts, s->smooth_mid, s->prev_mid,
-                  BAND_W, plot_y, plot_h, mids_win, n, BAND_MIDS_SMOOTH);
+    fill_wave_pts(s->band_scratch, s->mid_pts, s->smooth_mid, s->prev_mid,
+                  BAND_W, BAND_W, plot_y, plot_h, mids_win, n, BAND_MIDS_SMOOTH);
 
     biquad_process(&s->band_hp_mids, samples, s->band_scratch, n);
-    fill_band_pts(s, s->high_pts, s->smooth_high, s->prev_high,
-                  2 * BAND_W, plot_y, plot_h, high_win, n, BAND_HIGH_SMOOTH);
+    fill_wave_pts(s->band_scratch, s->high_pts, s->smooth_high, s->prev_high,
+                  BAND_W, 2 * BAND_W, plot_y, plot_h, high_win, n, BAND_HIGH_SMOOTH);
+}
+
+void spectrum_update_stem(spectrum_t *s, i32 idx, const f32 *samples, i32 n,
+                          f32 sample_rate)
+{
+    assert(s           != NULL);
+    assert(samples     != NULL);
+    assert(idx >= 0 && idx < STEM_COUNT);
+    assert(n > 0 && n <= RING_SIZE);
+    assert(sample_rate >  0.0f);
+    assert(SPEC_W == STEM_COLS * STEM_W);
+    assert(PLOT_H == STEM_ROWS * STEM_H);
+
+    /* One window length for every stem — a shared time axis is what makes the
+     * six panels comparable, unlike the per-band windows above. */
+    i32 win = (i32)(STEM_WINDOW_S * sample_rate);
+    if (win < 1) { win = 1; }
+    if (win > n) { win = n; }
+
+    i32 col = idx % STEM_COLS;
+    i32 row = idx / STEM_COLS;
+    fill_wave_pts(samples, s->stem_pts[idx], s->smooth_stem[idx],
+                  s->prev_stem[idx], STEM_W, col * STEM_W,
+                  PLOT_Y + row * STEM_H, STEM_H, win, n, STEM_SMOOTH);
 }
 
 /* ── Scrolling spectrogram (waterfall) ─────────────────────────────────────── */

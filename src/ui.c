@@ -115,8 +115,8 @@ static i32 freq_to_px(f32 freq)
 
 /*
  * Map a dB value to a pixel row within an arbitrary vertical rect.
- * Replaces the old fixed-rect db_to_py; call with (SPEC_Y, SPEC_H) for the
- * full-height case or (SPEC_Y, SPEC_H/2) for the upper-half split.
+ * Replaces the old fixed-rect db_to_py; call with (PLOT_Y, PLOT_H) for the
+ * full-height case or (PLOT_Y, PLOT_H/2) for the upper-half split.
  */
 static i32 db_to_py_r(f32 db, i32 plot_y, i32 plot_h)
 {
@@ -346,6 +346,7 @@ static void draw_header_title(SDL_Renderer *r, const playlist_t *pl,
 static void draw_mode_buttons(SDL_Renderer *r, app_mode_t mode)
 {
     assert(r != NULL);
+    assert(mode == APP_MODE_PLAYER || mode == APP_MODE_SYNTH);
 
     static const char *const mode_labels[2] = { "Play", "Synth" };
     static const i32 mode_bw[2] = { MODE_BTN1_W, MODE_BTN2_W };
@@ -366,17 +367,73 @@ static void draw_mode_buttons(SDL_Renderer *r, app_mode_t mode)
 }
 
 /*
+ * Draw the separation status widget in the header, right of the track title.
+ * Returns the width it consumed (0 when there is nothing to show) so the caller
+ * can shrink the title's clip region by exactly that much.
+ *
+ * While a job runs this is a percentage bar; the label carries an animated
+ * ellipsis so that activity stays visible between percentage steps, which are
+ * minutes apart on a long track.  Once complete it becomes a persistent badge
+ * until the user opens the stems view.
+ */
+static i32 draw_stem_progress(SDL_Renderer *r, const stems_t *st, i32 right_x)
+{
+    assert(r  != NULL);
+    assert(st != NULL);
+    assert(STEM_PROG_W > 0);
+
+    /* Keyed on the job, not on the current track: a separation running for some
+     * other song must stay visible, since that is the only place its progress
+     * is reported. */
+    bool running = stems_job_active(st);
+    if (!running && !st->notify) { return 0; }
+
+    i32 x = right_x - STEM_PROG_W;
+    if (x < 0) { return 0; }
+
+    if (!running) {
+        set_col(r, COL_NOW);
+        (void)SDL_RenderDebugText(r, (f32)x, (f32)(HDR_Y + 6), "Stems ready");
+        return STEM_PROG_W;
+    }
+
+    /* Name the track being separated — it is often not the one playing.  The
+     * cycling ellipsis keeps motion visible even if the percentage stalls. */
+    static const char *const dots[4] = { "   ", ".  ", ".. ", "..." };
+    i32  phase = (i32)((SDL_GetTicks() / 300u) % 4u);
+    char buf[32];
+    (void)SDL_snprintf(buf, sizeof(buf), "%.7s%s %3d%%",
+                       (st->job_title[0] != '\0') ? st->job_title : "Stems",
+                       dots[phase], st->progress);
+    set_col(r, COL_TEXT);
+    (void)SDL_RenderDebugText(r, (f32)x, (f32)(HDR_Y + 2), buf);
+
+    i32 by = HDR_Y + 12;
+    set_col(r, COL_SCRUB_BG);
+    fill_rect(r, (f32)x, (f32)by, (f32)STEM_PROG_W, (f32)STEM_PROG_H);
+    i32 fw = STEM_PROG_W * st->progress / 100;
+    if (fw > 0) {
+        set_col(r, COL_SCRUB_FG);
+        fill_rect(r, (f32)x, (f32)by, (f32)fw, (f32)STEM_PROG_H);
+    }
+    set_col(r, COL_BORDER);
+    outline_rect(r, (f32)x, (f32)by, (f32)STEM_PROG_W, (f32)STEM_PROG_H);
+    return STEM_PROG_W;
+}
+
+/*
  * Draw the header bar: dark background, app name, current track title
  * and elapsed / total time.
  */
 static void draw_header(SDL_Renderer *r,
                          const audio_t *audio, const playlist_t *pl,
-                         ui_t *ui, app_mode_t mode)
+                         ui_t *ui, app_mode_t mode, const stems_t *stems)
 {
     assert(r     != NULL);
     assert(audio != NULL);
     assert(pl    != NULL);
     assert(ui    != NULL);
+    assert(stems != NULL);
 
     /* Background */
     set_col(r, COL_HEADER);
@@ -402,10 +459,14 @@ static void draw_header(SDL_Renderer *r,
     i32 tlen = (i32)SDL_strlen(timebuf);
     f32 tx   = (f32)(LOG_W - tlen * FONT_W - 4);
 
+    /* Separation status shares the title strip: whatever it consumes is taken
+     * off the title's clip width, so the two never overlap. */
+    i32 prog_w = draw_stem_progress(r, stems, (i32)tx - 4);
+
     /* Track title — player mode only, clip between mode button and time display. */
     if (mode == APP_MODE_PLAYER && pl->current >= 0 && pl->current < pl->count) {
         i32 title_x = MODE_BTN_X + MODE_BTN1_W + MODE_BTN_GAP + MODE_BTN2_W + 8;
-        i32 clip_w  = (i32)tx - title_x - 4;
+        i32 clip_w  = (i32)tx - title_x - 4 - prog_w;
         if (clip_w > 0) { draw_header_title(r, pl, ui, title_x, clip_w); }
     }
 
@@ -476,7 +537,7 @@ static void draw_freq_axes(SDL_Renderer *r, i32 plot_y, i32 plot_h)
     assert(r != NULL);
     assert(plot_h > 0);
 
-    bool at_bottom = (plot_y + plot_h == SPEC_Y + SPEC_H);
+    bool at_bottom = (plot_y + plot_h == PLOT_Y + PLOT_H);
 
     /* Panel background */
     set_col(r, COL_PANEL);
@@ -546,7 +607,7 @@ static void draw_amp_labels(SDL_Renderer *r, i32 plot_y, i32 plot_h)
         i32 llen = (i32)SDL_strlen(amp_labels[t]);
         f32 lx   = (f32)(SPEC_X - llen * FONT_W - 2);
         f32 ly   = (f32)(plot_y + (i32)(amp_frac[t] * (f32)plot_h) - FONT_H / 2);
-        if (t == 0 && plot_y != SPEC_Y) { ly = (f32)plot_y; }
+        if (t == 0 && plot_y != PLOT_Y) { ly = (f32)plot_y; }
         if (lx < 0.0f) { lx = 0.0f; }
         set_col(r, COL_TICK);
         (void)SDL_RenderDebugText(r, lx, ly, amp_labels[t]);
@@ -589,7 +650,7 @@ static void draw_time_axes(SDL_Renderer *r, i32 plot_y, i32 plot_h)
     assert(r != NULL);
     assert(plot_h > 0);
 
-    bool at_bottom = (plot_y + plot_h == SPEC_Y + SPEC_H);
+    bool at_bottom = (plot_y + plot_h == PLOT_Y + PLOT_H);
 
     /* Panel background */
     set_col(r, COL_PANEL);
@@ -628,16 +689,20 @@ static void draw_time_axes(SDL_Renderer *r, i32 plot_y, i32 plot_h)
 
 /*
  * Draw a wide toggle button (Deconstruct / Spectrogram): filled box, border,
- * and a centred label.  hot selects the active colour.
+ * and a centred label.  hot selects the active colour; when enabled is false
+ * the button renders dimmed (and its hit test ignores clicks), because the
+ * overlay it controls does not apply to the current graph mode.
  */
 static void draw_toggle_btn(SDL_Renderer *r, i32 bx, i32 by, i32 bw,
-                             bool hot, const char *label)
+                             bool hot, bool enabled, const char *label)
 {
     assert(r     != NULL);
     assert(label != NULL);
     assert(bw > 0 && GRAPH_BTN_H > 0);
 
-    if (hot) { set_col(r, COL_BTN_HOT); } else { set_col(r, COL_BTN); }
+    if      (!enabled) { set_col(r, COL_SCRUB_BG); }
+    else if (hot)      { set_col(r, COL_BTN_HOT);  }
+    else               { set_col(r, COL_BTN);      }
     fill_rect(r, (f32)bx, (f32)by, (f32)bw, (f32)GRAPH_BTN_H);
     set_col(r, COL_BORDER);
     outline_rect(r, (f32)bx, (f32)by, (f32)bw, (f32)GRAPH_BTN_H);
@@ -645,63 +710,76 @@ static void draw_toggle_btn(SDL_Renderer *r, i32 bx, i32 by, i32 bw,
     i32 llen = (i32)SDL_strlen(label);
     f32 lx   = (f32)(bx + (bw - llen * FONT_W) / 2);
     f32 ly   = (f32)(by + (GRAPH_BTN_H - FONT_H) / 2);
-    set_col(r, COL_TEXT);
+    if (enabled) { set_col(r, COL_TEXT); } else { set_col(r, COL_DIM); }
     (void)SDL_RenderDebugText(r, lx, ly, label);
 }
 
 /*
- * Y coordinate of the "Spectrogram" toggle: bottom-left interior of the freq
- * subplot, which is the full panel in Spec mode and the top half in Both mode.
+ * Overlay-toggle applicability.  The Spectrogram needs the frequency subplot
+ * on screen and Deconstruct needs the time-domain subplot; in modes where the
+ * relevant subplot is absent the button is drawn dimmed and ignores clicks.
+ * Both the draw and the hit test consult these, so the two cannot disagree.
  */
-static i32 specgram_btn_y(graph_mode_t mode)
+static bool specgram_applicable(graph_mode_t mode)
 {
-    assert(GRAPH_BTN_H > 0);
-    i32 fh = (mode == GRAPH_MODE_BOTH) ? SPEC_H / 2 : SPEC_H;
-    return SPEC_Y + fh - GRAPH_BTN_H - 2;
+    assert(mode >= 0 && mode < GRAPH_MODE_COUNT);
+    assert(GRAPH_MODE_COUNT > 0);
+    return (mode == GRAPH_MODE_FREQ || mode == GRAPH_MODE_BOTH);
+}
+
+static bool decomp_applicable(graph_mode_t mode)
+{
+    assert(mode >= 0 && mode < GRAPH_MODE_COUNT);
+    assert(GRAPH_MODE_COUNT > 0);
+    return (mode == GRAPH_MODE_TIME || mode == GRAPH_MODE_BOTH);
 }
 
 /*
- * Draw the three graph-mode toggle buttons in the top-right interior of the
- * spectrum panel, plus the Deconstruct / Spectrogram toggles when their plot
- * areas are visible.  Buttons matching the active state are drawn hot.
+ * Draw the graph toolbar: the strip across the top of the spectrum panel
+ * holding every graph button.  Mode selectors are right-aligned (the active
+ * one hot), overlay toggles left-aligned.  All positions are fixed, so nothing
+ * shifts when the mode changes and nothing overlaps plot content.
  */
-static void draw_graph_buttons(SDL_Renderer *r, const ui_t *ui)
+static void draw_graph_toolbar(SDL_Renderer *r, const ui_t *ui)
 {
     assert(r  != NULL);
     assert(ui != NULL);
     assert(GRAPH_BTN_W > 0 && GRAPH_BTN_H > 0);
+    assert(GRAPH_BAR_H >= GRAPH_BTN_H);
 
-    static const char *const labels[3] = { "Spec", "Wave", "Both" };
-    i32 x0 = SPEC_X + SPEC_W - 3 * GRAPH_BTN_W - 2 * GRAPH_BTN_GAP - 2;
-    i32 by = SPEC_Y + 2;
+    /* One label per graph mode, each parenthesising its keyboard shortcut.
+     * Sized by the enum so adding a mode without a label is a compile error
+     * rather than a silent out-of-bounds read.  "Stem" takes T because S
+     * already selects the spectrum view. */
+    static const char *const labels[GRAPH_MODE_COUNT] = {
+        "(S)pec", "(W)ave", "(B)oth", "S(t)em"
+    };
+
+    set_col(r, COL_HEADER);
+    fill_rect(r, (f32)SPEC_X, (f32)SPEC_Y, (f32)SPEC_W, (f32)GRAPH_BAR_H);
 
     for (i32 b = 0; b < (i32)GRAPH_MODE_COUNT; b++) {
-        i32 bx     = x0 + b * (GRAPH_BTN_W + GRAPH_BTN_GAP);
+        i32  bx     = GBAR_R_X + b * (GRAPH_BTN_W + GRAPH_BTN_GAP);
         bool active = ((graph_mode_t)b == ui->graph_mode);
 
         if (active) { set_col(r, COL_BTN_HOT); } else { set_col(r, COL_BTN); }
-        fill_rect(r, (f32)bx, (f32)by, (f32)GRAPH_BTN_W, (f32)GRAPH_BTN_H);
+        fill_rect(r, (f32)bx, (f32)GBAR_BTN_Y, (f32)GRAPH_BTN_W, (f32)GRAPH_BTN_H);
         set_col(r, COL_BORDER);
-        outline_rect(r, (f32)bx, (f32)by, (f32)GRAPH_BTN_W, (f32)GRAPH_BTN_H);
+        outline_rect(r, (f32)bx, (f32)GBAR_BTN_Y, (f32)GRAPH_BTN_W, (f32)GRAPH_BTN_H);
 
         i32 llen = (i32)SDL_strlen(labels[b]);
         f32 lx   = (f32)(bx + (GRAPH_BTN_W - llen * FONT_W) / 2);
-        f32 ly   = (f32)(by + (GRAPH_BTN_H - FONT_H) / 2);
+        f32 ly   = (f32)(GBAR_BTN_Y + (GRAPH_BTN_H - FONT_H) / 2);
         set_col(r, COL_TEXT);
         (void)SDL_RenderDebugText(r, lx, ly, labels[b]);
     }
 
-    /* "Deconstruct" toggle: bottom-left of the panel, only when time-domain is visible. */
-    if (ui->graph_mode != GRAPH_MODE_FREQ) {
-        draw_toggle_btn(r, DECOMP_BTN_X, DECOMP_BTN_Y, DECOMP_BTN_W,
-                        ui->wave_decompose, "Deconstruct");
-    }
-
-    /* "Spectrogram" toggle: bottom-left of the freq subplot, when visible. */
-    if (ui->graph_mode != GRAPH_MODE_TIME) {
-        draw_toggle_btn(r, SPECGRAM_BTN_X, specgram_btn_y(ui->graph_mode),
-                        SPECGRAM_BTN_W, ui->specgram_on, "Spectrogram");
-    }
+    draw_toggle_btn(r, SPECGRAM_BTN_X, GBAR_BTN_Y, SPECGRAM_BTN_W,
+                    ui->specgram_on, specgram_applicable(ui->graph_mode),
+                    "Spectro(g)ram");
+    draw_toggle_btn(r, DECOMP_BTN_X, GBAR_BTN_Y, DECOMP_BTN_W,
+                    ui->wave_decompose, decomp_applicable(ui->graph_mode),
+                    "(D)econstruct");
 }
 
 /*
@@ -728,8 +806,8 @@ static void draw_band_panel(SDL_Renderer *r, i32 b, i32 plot_y, i32 plot_h,
     (void)SDL_RenderLine(r, (f32)bx,            (f32)(plot_y + plot_h / 2),
                             (f32)(bx + BAND_W), (f32)(plot_y + plot_h / 2));
 
-    /* Band label, left-aligned at the top of the sub-panel.  Left alignment also
-     * keeps the "High" panel's label clear of the graph-mode buttons (top-right). */
+    /* Band label, left-aligned at the top of the sub-panel.  (The graph buttons
+     * live in the toolbar above the plot, so nothing here can collide.) */
     set_col(r, COL_DIM);
     (void)SDL_RenderDebugText(r, (f32)(bx + 2), (f32)(plot_y + 2), band_labels[b]);
 
@@ -765,7 +843,7 @@ static void draw_band_axes(SDL_Renderer *r, i32 plot_y, i32 plot_h)
     assert(plot_h >  0);
     assert(BAND_W >  0);
 
-    bool at_bottom = (plot_y + plot_h == SPEC_Y + SPEC_H);
+    bool at_bottom = (plot_y + plot_h == PLOT_Y + PLOT_H);
 
     set_col(r, COL_PANEL);
     fill_rect(r, (f32)SPEC_X, (f32)plot_y, (f32)SPEC_W, (f32)plot_h);
@@ -815,6 +893,209 @@ static void draw_band_lines(SDL_Renderer *r, const spectrum_t *spectrum)
     (void)SDL_RenderLines(r, spectrum->mid_pts,  BAND_W);
     set_col(r, COL_HIGHS);
     (void)SDL_RenderLines(r, spectrum->high_pts, BAND_W);
+}
+
+/* ── Instrument-stem grid ────────────────────────────────────────────────── */
+
+/* Per-stem line colours, in the engine's fixed source order.  Each COL_STEM_*
+ * macro expands to the four R,G,B,A values that fill one row. */
+static const u8 stem_rgb[STEM_COUNT][4] = {
+    { COL_STEM_DRUMS  }, { COL_STEM_BASS   }, { COL_STEM_OTHER  },
+    { COL_STEM_VOCALS }, { COL_STEM_GUITAR }, { COL_STEM_PIANO  },
+};
+
+/* Top-left corner of stem cell idx within the plot region. */
+static void stem_cell_origin(i32 idx, i32 *cx, i32 *cy)
+{
+    assert(cx != NULL);
+    assert(cy != NULL);
+    assert(idx >= 0 && idx < STEM_COUNT);
+    *cx = SPEC_X + (idx % STEM_COLS) * STEM_W;
+    *cy = PLOT_Y + (idx / STEM_COLS) * STEM_H;
+}
+
+/*
+ * Time tick marks for one stem cell at 0 / half / full of the shared window.
+ * Numeric labels are drawn only beneath the bottom row, where nothing sits
+ * below them.  At an internal divider the "20" of one cell and the "0" of the
+ * next share an x, so they are justified apart (as draw_band_panel does).
+ */
+static void draw_stem_ticks(SDL_Renderer *r, i32 idx, i32 cx, i32 cy,
+                             bool at_bottom)
+{
+    assert(r != NULL);
+    assert(idx >= 0 && idx < STEM_COUNT);
+    assert(STEM_W > 0);
+
+    for (i32 t = 0; t <= 2; t++) {
+        i32 px = cx + t * (STEM_W - 1) / 2;
+        set_col(r, COL_AXIS);
+        (void)SDL_RenderLine(r, (f32)px, (f32)(cy + STEM_H - 3),
+                                (f32)px, (f32)(cy + STEM_H));
+        if (!at_bottom) { continue; }
+
+        char lbuf[8];
+        (void)SDL_snprintf(lbuf, sizeof(lbuf), "%d",
+                           t * (i32)(STEM_WINDOW_S * 1000.0f) / 2);
+        i32 llen = (i32)SDL_strlen(lbuf);
+        i32 col  = idx % STEM_COLS;
+        f32 lx;
+        if      (t == 2 && col < STEM_COLS - 1) { lx = (f32)(px - llen * FONT_W - 2); }
+        else if (t == 0 && col > 0)             { lx = (f32)(px + 2); }
+        else                                    { lx = (f32)(px - llen * FONT_W / 2); }
+        set_col(r, COL_TICK);
+        (void)SDL_RenderDebugText(r, lx, (f32)(cy + STEM_H + 4), lbuf);
+    }
+}
+
+/*
+ * Draw one stem cell: frame, zero midline, mute checkbox, name, time ticks and
+ * the waveform.  A muted stem still shows its live waveform — drawn in flat
+ * dimmed grey rather than its own colour — so the user can see what has been
+ * taken out of the mix.
+ */
+static void draw_stem_cell(SDL_Renderer *r, const spectrum_t *sp,
+                            const stems_t *st, i32 idx)
+{
+    assert(r  != NULL);
+    assert(sp != NULL);
+    assert(st != NULL);
+    assert(idx >= 0 && idx < STEM_COUNT);
+
+    i32 cx, cy;
+    stem_cell_origin(idx, &cx, &cy);
+    bool on        = st->enabled[idx];
+    bool at_bottom = (cy + STEM_H == PLOT_Y + PLOT_H);
+
+    set_col(r, COL_PANEL);
+    fill_rect(r, (f32)cx, (f32)cy, (f32)STEM_W, (f32)STEM_H);
+    set_col(r, COL_AXIS);
+    outline_rect(r, (f32)cx, (f32)cy, (f32)STEM_W, (f32)STEM_H);
+    (void)SDL_RenderLine(r, (f32)cx,            (f32)(cy + STEM_H / 2),
+                            (f32)(cx + STEM_W), (f32)(cy + STEM_H / 2));
+
+    draw_stem_ticks(r, idx, cx, cy, at_bottom);
+
+    /* Waveform, beneath the overlay so the label stays legible. */
+    if (on) {
+        set_col(r, stem_rgb[idx][0], stem_rgb[idx][1],
+                   stem_rgb[idx][2], stem_rgb[idx][3]);
+    } else {
+        set_col(r, COL_STEM_MUTED);
+    }
+    (void)SDL_RenderLines(r, sp->stem_pts[idx], STEM_W);
+
+    /* Mute checkbox and stem name, top-left interior. */
+    i32 bx = cx + 2;
+    i32 by = cy + 2;
+    if (on) { set_col(r, COL_BTN_HOT); } else { set_col(r, COL_BTN); }
+    fill_rect(r, (f32)bx, (f32)by, (f32)STEM_CB_SZ, (f32)STEM_CB_SZ);
+    set_col(r, COL_BORDER);
+    outline_rect(r, (f32)bx, (f32)by, (f32)STEM_CB_SZ, (f32)STEM_CB_SZ);
+    if (on) {
+        set_col(r, COL_TEXT);
+        (void)SDL_RenderDebugText(r, (f32)(bx + 1), (f32)by, "x");
+    }
+    const char *nm = stems_name(idx);
+    if (nm != NULL) {
+        if (on) { set_col(r, COL_TEXT); } else { set_col(r, COL_DIM); }
+        (void)SDL_RenderDebugText(r, (f32)(bx + STEM_CB_SZ + 3), (f32)by, nm);
+    }
+}
+
+/*
+ * Draw the centred action button and message shown when stems are not ready.
+ * The label and message depend on the job status; the button rect is fixed so
+ * one hit test serves every state.
+ */
+static void draw_stem_action(SDL_Renderer *r, const stems_t *st)
+{
+    assert(r  != NULL);
+    assert(st != NULL);
+    assert(STEM_ACT_W > 0);
+
+    const char *label;
+    const char *msg;
+    bool        active = true;
+    switch (st->status) {
+    case STEMS_RUNNING:
+        label = "Cancel";
+        msg   = "Separating - this may take several minutes";
+        break;
+    case STEMS_FAILED:
+        label = "Retry";
+        msg   = (st->err[0] != '\0') ? st->err : "Separation failed";
+        break;
+    default:
+        /* A job for a different track is still occupying the engine.  Say so
+         * rather than offering a button that would silently do nothing. */
+        if (stems_job_active(st)) {
+            label  = "Busy";
+            msg    = "Already separating another track - finishing that first";
+            active = false;
+        } else {
+            label = "Separate";
+            msg   = "Splits this track into 6 instruments - takes several minutes";
+        }
+        break;
+    }
+
+    if (active) { set_col(r, COL_BTN_HOT); } else { set_col(r, COL_SCRUB_BG); }
+    fill_rect(r, (f32)STEM_ACT_X, (f32)STEM_ACT_Y,
+                 (f32)STEM_ACT_W, (f32)STEM_ACT_H);
+    set_col(r, COL_BORDER);
+    outline_rect(r, (f32)STEM_ACT_X, (f32)STEM_ACT_Y,
+                    (f32)STEM_ACT_W, (f32)STEM_ACT_H);
+    i32 llen = (i32)SDL_strlen(label);
+    if (active) { set_col(r, COL_TEXT); } else { set_col(r, COL_DIM); }
+    (void)SDL_RenderDebugText(r,
+        (f32)(STEM_ACT_X + (STEM_ACT_W - llen * FONT_W) / 2),
+        (f32)(STEM_ACT_Y + (STEM_ACT_H - FONT_H) / 2), label);
+
+    i32 mlen = (i32)SDL_strlen(msg);
+    f32 mx   = (f32)(SPEC_X + (SPEC_W - mlen * FONT_W) / 2);
+    if (mx < (f32)SPEC_X) { mx = (f32)SPEC_X; }
+    set_col(r, COL_DIM);
+    (void)SDL_RenderDebugText(r, mx, (f32)(STEM_ACT_Y + STEM_ACT_H + 8), msg);
+}
+
+/*
+ * Draw the stems view: the 3×2 grid of per-instrument waveforms when the cache
+ * is ready, otherwise the centred action button for the current job status.
+ */
+static void draw_stem_grid(SDL_Renderer *r, const spectrum_t *sp,
+                            const stems_t *st)
+{
+    assert(r  != NULL);
+    assert(sp != NULL);
+    assert(st != NULL);
+    assert(SPEC_W == STEM_COLS * STEM_W);
+    assert(PLOT_H == STEM_ROWS * STEM_H);
+
+    set_col(r, COL_PANEL);
+    fill_rect(r, (f32)SPEC_X, (f32)PLOT_Y, (f32)SPEC_W, (f32)PLOT_H);
+
+    if (st->status != STEMS_READY) {
+        set_col(r, COL_AXIS);
+        outline_rect(r, (f32)SPEC_X, (f32)PLOT_Y, (f32)SPEC_W, (f32)PLOT_H);
+        draw_stem_action(r, st);
+        return;
+    }
+
+    /* Amplitude labels once per grid row, outside the plot on the left. */
+    for (i32 row = 0; row < STEM_ROWS; row++) {
+        draw_amp_labels(r, PLOT_Y + row * STEM_H, STEM_H);
+    }
+    for (i32 i = 0; i < STEM_COUNT; i++) {
+        draw_stem_cell(r, sp, st, i);
+    }
+
+    /* One shared x-axis title — every cell uses the same STEM_WINDOW_S axis. */
+    const char *xlabel = "Time (ms)";
+    i32 xlen = (i32)SDL_strlen(xlabel);
+    set_col(r, COL_DIM);
+    (void)SDL_RenderDebugText(r, (f32)(SPEC_X + SPEC_W - xlen * FONT_W - 2),
+                                 (f32)(PLOT_Y + PLOT_H - FONT_H - 2), xlabel);
 }
 
 /*
@@ -877,47 +1158,52 @@ static void draw_specgram(SDL_Renderer *r, spectrum_t *sp, ui_t *ui,
  * on ui->graph_mode, then overlays the mode toggle buttons.  The spectrogram
  * (when enabled) sits between the freq axes and the spectrum line.
  */
-static void draw_graph(SDL_Renderer *r, spectrum_t *spectrum, ui_t *ui)
+static void draw_graph(SDL_Renderer *r, spectrum_t *spectrum, ui_t *ui,
+                        const stems_t *stems)
 {
     assert(r        != NULL);
     assert(spectrum != NULL);
     assert(ui       != NULL);
-    assert(SPEC_H   >  0);
+    assert(stems    != NULL);
+    assert(PLOT_H   >  0);
 
     switch (ui->graph_mode) {
     case GRAPH_MODE_FREQ:
-        draw_freq_axes(r, SPEC_Y, SPEC_H);
-        if (ui->specgram_on) { draw_specgram(r, spectrum, ui, SPEC_Y, SPEC_H); }
+        draw_freq_axes(r, PLOT_Y, PLOT_H);
+        if (ui->specgram_on) { draw_specgram(r, spectrum, ui, PLOT_Y, PLOT_H); }
         draw_spectrum_line(r, spectrum);
         break;
     case GRAPH_MODE_TIME:
         if (ui->wave_decompose) {
-            draw_band_axes(r, SPEC_Y, SPEC_H);
+            draw_band_axes(r, PLOT_Y, PLOT_H);
             draw_band_lines(r, spectrum);
         } else {
-            draw_time_axes(r, SPEC_Y, SPEC_H);
+            draw_time_axes(r, PLOT_Y, PLOT_H);
             draw_time_line(r, spectrum);
         }
         break;
     case GRAPH_MODE_BOTH: {
-        i32 half = SPEC_H / 2;
-        draw_freq_axes(r, SPEC_Y, half);
-        if (ui->specgram_on) { draw_specgram(r, spectrum, ui, SPEC_Y, half); }
+        i32 half = PLOT_H / 2;
+        draw_freq_axes(r, PLOT_Y, half);
+        if (ui->specgram_on) { draw_specgram(r, spectrum, ui, PLOT_Y, half); }
         draw_spectrum_line(r, spectrum);
         if (ui->wave_decompose) {
-            draw_band_axes(r, SPEC_Y + half, half);
+            draw_band_axes(r, PLOT_Y + half, half);
             draw_band_lines(r, spectrum);
         } else {
-            draw_time_axes(r, SPEC_Y + half, half);
+            draw_time_axes(r, PLOT_Y + half, half);
             draw_time_line(r, spectrum);
         }
         break;
     }
+    case GRAPH_MODE_STEMS:
+        draw_stem_grid(r, spectrum, stems);
+        break;
     case GRAPH_MODE_COUNT:
         break;
     }
 
-    draw_graph_buttons(r, ui);
+    draw_graph_toolbar(r, ui);
 }
 
 /*
@@ -1354,7 +1640,8 @@ void ui_draw(SDL_Renderer       *r,
              const playlist_t   *playlist,
              ui_t               *ui,
              app_mode_t          mode,
-             const synth_t      *synth)
+             const synth_t      *synth,
+             const stems_t      *stems)
 {
     assert(r        != NULL);
     assert(audio    != NULL);
@@ -1362,6 +1649,7 @@ void ui_draw(SDL_Renderer       *r,
     assert(playlist != NULL);
     assert(ui       != NULL);
     assert(synth    != NULL);
+    assert(stems    != NULL);
 
     (void)SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
 
@@ -1369,8 +1657,8 @@ void ui_draw(SDL_Renderer       *r,
     set_col(r, COL_BG);
     (void)SDL_RenderClear(r);
 
-    draw_header(r, audio, playlist, ui, mode);
-    draw_graph(r, spectrum, ui);
+    draw_header(r, audio, playlist, ui, mode, stems);
+    draw_graph(r, spectrum, ui, stems);
 
     if (mode == APP_MODE_SYNTH) {
         draw_synth_panel(r, ui, synth);
@@ -1471,6 +1759,7 @@ static bool in_add_button(f32 lx, f32 ly)
 static i32 which_mode_btn(f32 lx, f32 ly)
 {
     assert(MODE_BTN1_W > 0 && MODE_BTN2_W > 0 && MODE_BTN_H > 0);
+    assert(MODE_BTN_X >= 0 && MODE_BTN_Y >= 0);
     if (ly < (f32)MODE_BTN_Y || ly >= (f32)(MODE_BTN_Y + MODE_BTN_H)) { return -1; }
     if (lx >= (f32)MODE_BTN_X && lx < (f32)(MODE_BTN_X + MODE_BTN1_W)) { return 0; }
     i32 x2 = MODE_BTN_X + MODE_BTN1_W + MODE_BTN_GAP;
@@ -1479,39 +1768,83 @@ static i32 which_mode_btn(f32 lx, f32 ly)
 }
 
 /*
- * Hit test: is (lx, ly) inside graph-mode toggle button btn_idx?
- * btn 0 = Freq, btn 1 = Wave, btn 2 = Both.
- * Buttons sit in the top-right interior of the spectrum panel.
+ * Hit test: is (lx, ly) inside graph-mode selector button btn_idx?
+ * btn 0 = Spec, btn 1 = Wave, btn 2 = Both.  Right-aligned in the toolbar.
  */
 static bool in_graph_btn(f32 lx, f32 ly, i32 btn_idx)
 {
     assert(btn_idx >= 0 && btn_idx < (i32)GRAPH_MODE_COUNT);
     assert(GRAPH_BTN_W > 0 && GRAPH_BTN_H > 0);
-    i32 x0 = SPEC_X + SPEC_W - 3 * GRAPH_BTN_W - 2 * GRAPH_BTN_GAP - 2;
-    i32 bx = x0 + btn_idx * (GRAPH_BTN_W + GRAPH_BTN_GAP);
-    i32 by = SPEC_Y + 2;
+    i32 bx = GBAR_R_X + btn_idx * (GRAPH_BTN_W + GRAPH_BTN_GAP);
     return (lx >= (f32)bx && lx < (f32)(bx + GRAPH_BTN_W) &&
-            ly >= (f32)by && ly < (f32)(by + GRAPH_BTN_H));
+            ly >= (f32)GBAR_BTN_Y && ly < (f32)(GBAR_BTN_Y + GRAPH_BTN_H));
 }
 
-/* Hit-test the "Deconstruct" decompose-toggle button. */
-static bool in_decomp_btn(f32 lx, f32 ly)
+/* Hit-test a left-aligned toolbar toggle at bx with width bw. */
+static bool in_bar_toggle(f32 lx, f32 ly, i32 bx, i32 bw)
 {
-    assert(DECOMP_BTN_W > 0);
-    assert(GRAPH_BTN_H  > 0);
-    return (lx >= (f32)DECOMP_BTN_X && lx < (f32)(DECOMP_BTN_X + DECOMP_BTN_W) &&
-            ly >= (f32)DECOMP_BTN_Y && ly < (f32)(DECOMP_BTN_Y + GRAPH_BTN_H));
+    assert(bw > 0);
+    assert(GRAPH_BTN_H > 0);
+    return (lx >= (f32)bx && lx < (f32)(bx + bw) &&
+            ly >= (f32)GBAR_BTN_Y && ly < (f32)(GBAR_BTN_Y + GRAPH_BTN_H));
 }
 
-/* Hit-test the "Spectrogram" toggle (its y depends on the graph mode). */
-static bool in_specgram_btn(f32 lx, f32 ly, graph_mode_t mode)
+/*
+ * Hit test the six stem mute checkboxes.  Returns the stem index, or -1 when
+ * the point is outside every box.
+ */
+static i32 which_stem_checkbox(f32 lx, f32 ly)
 {
-    assert(SPECGRAM_BTN_W > 0);
-    assert(GRAPH_BTN_H    > 0);
-    i32 by = specgram_btn_y(mode);
-    return (lx >= (f32)SPECGRAM_BTN_X &&
-            lx <  (f32)(SPECGRAM_BTN_X + SPECGRAM_BTN_W) &&
-            ly >= (f32)by && ly < (f32)(by + GRAPH_BTN_H));
+    assert(STEM_CB_SZ > 0);
+    assert(STEM_COUNT > 0);
+
+    for (i32 i = 0; i < STEM_COUNT; i++) {
+        i32 cx, cy;
+        stem_cell_origin(i, &cx, &cy);
+        i32 bx = cx + 2;
+        i32 by = cy + 2;
+        if (lx >= (f32)bx && lx < (f32)(bx + STEM_CB_SZ) &&
+            ly >= (f32)by && ly < (f32)(by + STEM_CB_SZ)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* Hit-test the centred Separate / Cancel / Retry button. */
+static bool in_stem_action_btn(f32 lx, f32 ly)
+{
+    assert(STEM_ACT_W > 0);
+    assert(STEM_ACT_H > 0);
+    return (lx >= (f32)STEM_ACT_X && lx < (f32)(STEM_ACT_X + STEM_ACT_W) &&
+            ly >= (f32)STEM_ACT_Y && ly < (f32)(STEM_ACT_Y + STEM_ACT_H));
+}
+
+/*
+ * Route a click inside the stems view.  When the cache is ready the grid's mute
+ * boxes are live; otherwise the single action button is, and what it means
+ * depends on the job status.
+ */
+static ui_action_t mouse_down_stems(ui_t *ui, f32 lx, f32 ly,
+                                     const stems_t *stems)
+{
+    assert(ui    != NULL);
+    assert(stems != NULL);
+
+    if (stems->status == STEMS_READY) {
+        i32 idx = which_stem_checkbox(lx, ly);
+        if (idx >= 0) {
+            ui->stem_hover = idx;
+            return UI_ACTION_STEM_TOGGLE;
+        }
+        return UI_ACTION_NONE;
+    }
+    if (!in_stem_action_btn(lx, ly)) { return UI_ACTION_NONE; }
+    if (stems->status == STEMS_RUNNING) { return UI_ACTION_STEMS_CANCEL; }
+    /* The engine is mid-job on another track: the button reads "Busy" and is
+     * inert, matching what draw_stem_action shows. */
+    if (stems_job_active(stems)) { return UI_ACTION_NONE; }
+    return UI_ACTION_STEMS_BEGIN;   /* IDLE or FAILED (Separate / Retry) */
 }
 
 static bool in_synth_inst_row(f32 lx, f32 ly)
@@ -1636,21 +1969,23 @@ static ui_action_t mouse_down_player(ui_t *ui, f32 lx, f32 ly, playlist_t *pl)
 static ui_action_t mouse_down_toolbar(ui_t *ui, f32 lx, f32 ly, app_mode_t mode)
 {
     assert(ui != NULL);
+    assert(ui->graph_mode >= 0 && ui->graph_mode < GRAPH_MODE_COUNT);
 
-    /* "Deconstruct" toggle — only visible when time-domain is shown. */
-    if (ui->graph_mode != GRAPH_MODE_FREQ && in_decomp_btn(lx, ly)) {
+    /* Overlay toggles — drawn dimmed and inert in modes they do not apply to,
+     * so the same predicate gates the click that gated the dimming. */
+    if (decomp_applicable(ui->graph_mode) &&
+        in_bar_toggle(lx, ly, DECOMP_BTN_X, DECOMP_BTN_W)) {
         ui->wave_decompose = !ui->wave_decompose;
         return UI_ACTION_WAVE_DECOMPOSE;
     }
 
-    /* "Spectrogram" toggle — only visible when the freq plot is shown. */
-    if (ui->graph_mode != GRAPH_MODE_TIME &&
-        in_specgram_btn(lx, ly, ui->graph_mode)) {
+    if (specgram_applicable(ui->graph_mode) &&
+        in_bar_toggle(lx, ly, SPECGRAM_BTN_X, SPECGRAM_BTN_W)) {
         ui->specgram_on = !ui->specgram_on;
         return UI_ACTION_SPECGRAM;
     }
 
-    /* Graph mode toggle buttons — active in both app modes, checked first. */
+    /* Graph mode selector buttons — active in both app modes. */
     for (i32 b = 0; b < (i32)GRAPH_MODE_COUNT; b++) {
         if (in_graph_btn(lx, ly, b)) {
             ui->graph_mode = (graph_mode_t)b;
@@ -1673,12 +2008,13 @@ static ui_action_t mouse_down_toolbar(ui_t *ui, f32 lx, f32 ly, app_mode_t mode)
 
 ui_action_t ui_on_mouse_down(ui_t *ui, const SDL_MouseButtonEvent *e,
                               const audio_t *audio, playlist_t *pl,
-                              app_mode_t mode)
+                              app_mode_t mode, const stems_t *stems)
 {
     assert(ui    != NULL);
     assert(e     != NULL);
     assert(audio != NULL);
     assert(pl    != NULL);
+    assert(stems != NULL);
 
     if (e->button != SDL_BUTTON_LEFT) { return UI_ACTION_NONE; }
 
@@ -1693,6 +2029,13 @@ ui_action_t ui_on_mouse_down(ui_t *ui, const SDL_MouseButtonEvent *e,
 
     ui_action_t toolbar = mouse_down_toolbar(ui, lx, ly, mode);
     if (toolbar != UI_ACTION_NONE) { return toolbar; }
+
+    /* Stems view owns the plot region: mute boxes when ready, else the action
+     * button.  Checked after the toolbar so the mode buttons stay reachable. */
+    if (ui->graph_mode == GRAPH_MODE_STEMS) {
+        ui_action_t sa = mouse_down_stems(ui, lx, ly, stems);
+        if (sa != UI_ACTION_NONE) { return sa; }
+    }
 
     /* Volume and seek bar — active in both modes. */
     if (in_vol_slider(lx, ly)) {
@@ -1854,6 +2197,9 @@ ui_action_t ui_on_key(ui_t *ui, const SDL_KeyboardEvent *e, app_mode_t mode)
     case SDL_SCANCODE_B:
         ui->graph_mode = GRAPH_MODE_BOTH;
         return UI_ACTION_GRAPH_MODE;
+    case SDL_SCANCODE_T:
+        ui->graph_mode = GRAPH_MODE_STEMS;
+        return UI_ACTION_GRAPH_MODE;
     case SDL_SCANCODE_D:
         ui->wave_decompose = !ui->wave_decompose;
         return UI_ACTION_WAVE_DECOMPOSE;
@@ -1880,6 +2226,7 @@ ui_action_t ui_on_key(ui_t *ui, const SDL_KeyboardEvent *e, app_mode_t mode)
 static i32 scroll_steps(ui_t *ui, f32 dy)
 {
     assert(ui != NULL);
+    assert(dy == dy);   /* reject NaN: it would poison scroll_accum permanently */
     ui->scroll_accum += dy;
     i32 steps = (i32)ui->scroll_accum;   /* truncates toward zero */
     ui->scroll_accum -= (f32)steps;

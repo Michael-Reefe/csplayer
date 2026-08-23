@@ -37,6 +37,7 @@ void run_audio_tests(void);
 void run_synth_tests(void);
 void run_ui_tests(void);
 void run_metadata_tests(void);
+void run_stems_tests(void);
 
 /* ── Test WAV generation ─────────────────────────────────────────────────── */
 
@@ -119,6 +120,9 @@ int main(void)
 
     printf("\n-- playlist --\n");
     run_playlist_tests();
+
+    printf("\n-- stems --\n");
+    run_stems_tests();
 
     printf("\n-- audio (integration) --\n");
     run_audio_tests();

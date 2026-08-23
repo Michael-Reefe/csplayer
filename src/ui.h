@@ -26,6 +26,7 @@
 #include "spectrum.h"
 #include "playlist.h"
 #include "synth.h"
+#include "stems.h"
 
 /* ── Action codes returned by input handlers ─────────────────────────────── */
 
@@ -53,6 +54,10 @@ typedef enum {
     UI_ACTION_WAVE_DECOMPOSE,    /* wave_decompose toggled; already updated by ui.c */
     /* Spectrogram toggle */
     UI_ACTION_SPECGRAM,          /* specgram_on toggled; already updated by ui.c    */
+    /* Instrument-stem decomposition */
+    UI_ACTION_STEMS_BEGIN,       /* start a separation job for the current track    */
+    UI_ACTION_STEMS_CANCEL,      /* abort the running separation job                */
+    UI_ACTION_STEM_TOGGLE,       /* mute/unmute one stem — ui_t.stem_hover is valid */
     /* Window */
     UI_ACTION_FULLSCREEN,        /* toggle SDL fullscreen (F11)                */
 } ui_action_t;
@@ -115,6 +120,9 @@ typedef struct {
     bool         specgram_on;
     SDL_Texture *specgram_tex;
     u8           specgram_px[SPECGRAM_COLS * 4];
+    /* Stem grid cell whose mute box was last clicked; valid when the returned
+     * action is UI_ACTION_STEM_TOGGLE.  -1 = none. */
+    i32          stem_hover;
     /* Sub-row remainder of mouse-wheel deltas for the discrete list/dropdown
      * scrollers.  A traditional wheel sends dy = ±1 per notch (→ one step), but a
      * trackpad sends many small fractional deltas; carrying the remainder here
@@ -133,6 +141,9 @@ typedef struct {
  *
  * spectrum is non-const because drawing consumes the spectrogram's dirty-row
  * state (spectrum_specgram_clear_dirty) after uploading it to the texture.
+ *
+ * stems supplies the separation job status and per-stem mute flags used by the
+ * stems view and the header progress widget.
  */
 void ui_draw(SDL_Renderer       *r,
              const audio_t      *audio,
@@ -140,15 +151,18 @@ void ui_draw(SDL_Renderer       *r,
              const playlist_t   *playlist,
              ui_t               *ui,
              app_mode_t          mode,
-             const synth_t      *synth);
+             const synth_t      *synth,
+             const stems_t      *stems);
 
 /*
  * Handle a mouse-button-down event.
  * Returns the action triggered (UI_ACTION_NONE if none).
+ * stems is consulted so that clicks in the stems view resolve against the
+ * current job status (action button vs. mute boxes).
  */
 ui_action_t ui_on_mouse_down(ui_t *ui, const SDL_MouseButtonEvent *e,
                               const audio_t *audio, playlist_t *pl,
-                              app_mode_t mode);
+                              app_mode_t mode, const stems_t *stems);
 
 /*
  * Handle a mouse-motion event (hover + seek-bar drag + scrollbar drag).
@@ -170,11 +184,14 @@ ui_action_t ui_on_mouse_up(ui_t *ui, const SDL_MouseButtonEvent *e);
  * Left    → UI_ACTION_REWIND
  * Right   → UI_ACTION_NEXT
  * F11     → UI_ACTION_FULLSCREEN
- * S       → GRAPH_MODE_FREQ  (spec)
- * W       → GRAPH_MODE_TIME  (wave)
- * B       → GRAPH_MODE_BOTH  (both)
- * D       → toggle wave_decompose
- * G       → toggle specgram_on (spectrogram)
+ * Each toolbar button's label parenthesises the key that activates it.
+ *
+ * S       → GRAPH_MODE_FREQ   "(S)pec"
+ * W       → GRAPH_MODE_TIME   "(W)ave"
+ * B       → GRAPH_MODE_BOTH   "(B)oth"
+ * T       → GRAPH_MODE_STEMS  "S(t)em"  (S is taken by the spectrum view)
+ * D       → toggle wave_decompose  "(D)econstruct"
+ * G       → toggle specgram_on     "Spectro(g)ram"
  * Shift+P → APP_MODE_PLAYER
  * Shift+S → APP_MODE_SYNTH
  */

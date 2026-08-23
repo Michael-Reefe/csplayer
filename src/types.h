@@ -35,7 +35,7 @@ typedef  double complex c64;
 
 /* ── Application metadata ────────────────────────────────────────────────── */
 #define CSPLAYER_APP_NAME    "csplayer"
-#define CSPLAYER_APP_VERSION "0.4.0"
+#define CSPLAYER_APP_VERSION "0.5.0"
 #define CSPLAYER_APP_ID      "com.csplayer.csplayer"
 #define CSPLAYER_ORG         "csplayer"
 
@@ -88,6 +88,19 @@ typedef  double complex c64;
 #define SPEC_W  582            /* 582 / 3 = 194 = BAND_W */
 #define SPEC_H  192
 
+/* The spectrum panel is split into a button toolbar across the top and the
+ * drawable plot region below it.  Every graph button lives in the toolbar, so
+ * no button overlaps plot content and no button position depends on the active
+ * graph mode.  SPEC_Y / SPEC_H remain the panel's outer footprint (nothing
+ * below it moves); PLOT_Y / PLOT_H are the plot bounds and are what every
+ * drawing and point-mapping routine must use.
+ *
+ * GRAPH_BAR_H = 16 is chosen so PLOT_H = 176 factors cleanly: PLOT_H / 2 = 88
+ * serves the Both-mode halves, the spectrogram ring, and the stem grid rows. */
+#define GRAPH_BAR_H  16                      /* GRAPH_BTN_H (10) + 3 px above/below */
+#define PLOT_Y       (SPEC_Y + GRAPH_BAR_H)  /* =  44 */
+#define PLOT_H       (SPEC_H - GRAPH_BAR_H)  /* = 176 */
+
 /* Playlist panel — 22 px below spectrum:
  * 4 px gap + 8 px tick labels + 2 px gap + 8 px X-axis title = 22 px */
 #define PL_Y    (SPEC_Y + SPEC_H + 22)   /* = 242 */
@@ -122,6 +135,7 @@ typedef enum {
     GRAPH_MODE_FREQ  = 0,  /* log-freq FFT plot (default)              */
     GRAPH_MODE_TIME,       /* time-domain waveform (green)             */
     GRAPH_MODE_BOTH,       /* horizontal split: freq top, time bottom  */
+    GRAPH_MODE_STEMS,      /* 3×2 grid of per-instrument waveforms     */
     GRAPH_MODE_COUNT,      /* sentinel — do not use as a runtime value */
 } graph_mode_t;
 
@@ -139,10 +153,31 @@ typedef enum {
 #define BAND_MIDS_SMOOTH    WAVE_SMOOTH_COEFF
 #define BAND_HIGH_SMOOTH    WAVE_SMOOTH_COEFF
 
-/* Graph mode toggle buttons (top-right interior of spectrum panel) */
-#define GRAPH_BTN_W    38   /* logical px per button (fits 4-char label + padding) */
-#define GRAPH_BTN_H    10   /* logical px per button height                        */
-#define GRAPH_BTN_GAP   2   /* gap between adjacent buttons                        */
+/* Graph toolbar buttons.  All of them sit in the GRAPH_BAR_H strip at the top
+ * of the spectrum panel: the graph-mode selectors are right-aligned, the
+ * overlay toggles (Spectrogram, Deconstruct) left-aligned.
+ *
+ * Every label parenthesises its keyboard shortcut — "(S)pec", "S(t)em",
+ * "Spectro(g)ram" — so the widths below allow for those two extra characters. */
+#define GRAPH_BTN_W    52   /* 6-char label ("(S)pec") × 8 px + 4 px padding */
+#define GRAPH_BTN_H    10   /* logical px per button height                  */
+#define GRAPH_BTN_GAP   2   /* gap between adjacent buttons                  */
+
+/* Common vertical placement: centred within the toolbar strip. */
+#define GBAR_BTN_Y   (SPEC_Y + (GRAPH_BAR_H - GRAPH_BTN_H) / 2)   /* = 31 */
+
+/* Left group — overlay toggles, in draw order. */
+#define GBAR_L_X        (SPEC_X + 2)                        /* = 42  */
+#define SPECGRAM_BTN_W  112  /* "Spectro(g)ram" = 13 chars × 8 px + padding */
+#define SPECGRAM_BTN_X  GBAR_L_X                            /* = 42  */
+#define DECOMP_BTN_W    112  /* "(D)econstruct" = 13 chars × 8 px + padding */
+#define DECOMP_BTN_X    (SPECGRAM_BTN_X + SPECGRAM_BTN_W + GRAPH_BTN_GAP)  /* = 156 */
+
+/* Right group origin — derived from GRAPH_MODE_COUNT so that adding a graph
+ * mode needs no arithmetic edit here or in the hit test.  Not usable in #if
+ * (it expands to an enum constant), which we never need. */
+#define GBAR_R_X  (SPEC_X + SPEC_W - (i32)GRAPH_MODE_COUNT * GRAPH_BTN_W \
+                   - ((i32)GRAPH_MODE_COUNT - 1) * GRAPH_BTN_GAP - 2)
 
 /* ── Scrolling spectrogram (waterfall) ──────────────────────────────────────
  * Ring buffer of amplitude rows behind the frequency plot: X = log frequency
@@ -152,21 +187,16 @@ typedef enum {
  * SPECGRAM_ROWS and SPECGRAM_COLS are free knobs: everything else (cell size,
  * frequency-bucket mapping, texture size, upload buffers, row period) derives
  * from them, so they can be changed independently.  Each cell renders as a
- * block of (SPEC_H/ROWS × SPEC_W/COLS) logical px with NEAREST scaling.
- * Crispest results when SPECGRAM_ROWS divides SPEC_H — and SPEC_H/2 for Both
- * mode — evenly (divisors of 96: 96, 48, 32, 24, …); otherwise blocks are
+ * block of (PLOT_H/ROWS × SPEC_W/COLS) logical px with NEAREST scaling.
+ * Crispest results when SPECGRAM_ROWS divides PLOT_H — and PLOT_H/2 for Both
+ * mode — evenly (divisors of 176: 88, 44, 22, 16, 11, …); otherwise blocks are
  * merely uneven by a pixel, never misaligned. */
-#define SPECGRAM_ROWS      (SPEC_H / 2)   /* ring rows (2 logical px per row) */
+#define SPECGRAM_ROWS      (PLOT_H / 2)   /* = 88 ring rows (2 logical px per row) */
 #define SPECGRAM_COLS      (SPEC_W / 2)   /* columns (~2 logical px per col)  */
 /* Seconds of history spanning the plot: one ring row per two rendered
  * frames, so the scroll rate is tied to TARGET_FPS. */
 #define SPECGRAM_WINDOW_S  (2.0f * ((f32)SPECGRAM_ROWS / (f32)TARGET_FPS))
 #define SPECGRAM_ROW_S     (SPECGRAM_WINDOW_S / (f32)SPECGRAM_ROWS)
-/* "Spectrogram" toggle: bottom-left interior of the freq subplot.  The y
- * coordinate is computed at runtime (the freq plot rect differs between
- * Spec and Both modes); x matches the Deconstruct button column. */
-#define SPECGRAM_BTN_X     (SPEC_X + 2)
-#define SPECGRAM_BTN_W     96   /* "Spectrogram" = 11 chars × 8 px + padding */
 /* Amplitude colormap: cubehelix (D.A. Green 2011, Bull. Astron. Soc. India
  * 39, 289) — a helix around the grey diagonal whose perceived brightness
  * rises monotonically from black (amplitude 0) to white (full scale).  The
@@ -232,12 +262,79 @@ typedef enum {
 /* Frequency cutoffs separating bass, mids, and highs. */
 #define DECOMP_BASS_HZ   200.0f        /* bass / mids boundary (Hz)    */
 #define DECOMP_MIDS_HZ  4000.0f        /* mids / highs boundary (Hz)   */
-/* "Deconstruct" toggle button: bottom-left interior of the spectrum panel. */
-#define DECOMP_BTN_X    (SPEC_X + 2)
-#define DECOMP_BTN_Y    (SPEC_Y + SPEC_H - GRAPH_BTN_H - 2)
-#define DECOMP_BTN_W    96   /* "Deconstruct" = 11 chars × 8 px + 8 px padding */
+/* The "Deconstruct" toggle's geometry lives with the other toolbar buttons
+ * (DECOMP_BTN_X / DECOMP_BTN_W, above). */
 /* Band waveform colours (mids reuse COL_WAVE green). */
 #define COL_BASS    255, 120,   0, 255   /* warm orange — bass  */
 #define COL_HIGHS     0, 180, 255, 255   /* cyan        — highs */
+
+/* ── Instrument-stem decomposition (GRAPH_MODE_STEMS) ────────────────────────
+ * Demucs v4 6-source separation, displayed as a 3×2 grid of time-domain plots
+ * on one shared time axis so the panels are directly comparable.  Stem order is
+ * fixed by the separation engine: drums, bass, other, vocals, guitar, piano. */
+#define STEM_COUNT      6
+#define STEM_COLS       3
+#define STEM_ROWS       2
+#define STEM_W          (SPEC_W / STEM_COLS)   /* 194 px per cell */
+#define STEM_H          (PLOT_H / STEM_ROWS)   /*  88 px per cell */
+/* One window for every stem (unlike the per-band windows above) — the point of
+ * this view is cross-instrument comparison, which a shared axis makes possible. */
+#define STEM_WINDOW_S   0.020f              /* 20 ms */
+#define STEM_SMOOTH     WAVE_SMOOTH_COEFF
+#define STEM_CB_SZ      8    /* mute checkbox, top-left interior of each cell */
+
+/* Centred action button (Separate / Cancel / Retry) shown when stems are not
+ * ready, with a one-line explanatory message beneath it. */
+#define STEM_ACT_W      120
+#define STEM_ACT_H      16
+#define STEM_ACT_X      (SPEC_X + (SPEC_W - STEM_ACT_W) / 2)   /* = 271 */
+#define STEM_ACT_Y      (PLOT_Y + PLOT_H / 2 - STEM_ACT_H)     /* = 116 */
+
+/* Header progress widget, shown while a separation job runs. */
+#define STEM_PROG_W     120
+#define STEM_PROG_H      6
+
+/* Chunks the engine separates in parallel.  Each one holds its own copy of the
+ * model, so this trades memory for speed and cannot simply track core count —
+ * too many and the engine dies part-way through. */
+#define STEM_MAX_THREADS  4
+/* Bytes of the engine's most recent output kept for failure messages. */
+#define STEM_TAIL_BYTES   96
+/* Upper bound on decode iterations, so streaming a file to WAV cannot spin if a
+ * decoder never reports EOF (NASA Rule 2).  At 32 KB per chunk this allows just
+ * over 3 hours of 44.1 kHz stereo 16-bit audio, well past any real track and
+ * comfortably inside the 4 GB limit of the WAV size fields. */
+#define STEM_DECODE_MAX_CHUNKS  60000
+/* Cap on pipe-drain iterations per poll, so a misbehaving child cannot hold
+ * the render loop (NASA Rule 2: every loop needs a fixed bound). */
+#define STEM_DRAIN_MAX    64
+#define STEMS_TAG       "stems"        /* MIX tag grouping the six tracks     */
+#define STEMS_DIR       "stems"        /* subdirectory of the pref directory  */
+#define STEMS_DONE_FILE "done.txt"
+#define STEMS_INPUT_WAV "input.wav"
+#define STEM_MODEL_FILE "ggml-model-htdemucs-6s-f16.bin"
+/* Separation engine executable, shipped next to csplayer.  The multi-threaded
+ * variant: it splits the track into STEM_MAX_THREADS chunks and separates them
+ * in parallel, which is measurably faster than the single-threaded build. */
+#ifdef _WIN32
+#define STEM_ENGINE_EXE "demucs_mt.cpp.main.exe"
+#else
+#define STEM_ENGINE_EXE "demucs_mt.cpp.main"
+#endif
+/* Stems are cached as 44.1 kHz stereo 16-bit WAV: transparent for playback and
+ * display, and half the size of the engine's float32 output. */
+#define STEM_RATE       44100
+#define STEM_CHANNELS   2
+#define STEM_BITS       16
+
+/* Per-stem waveform colours, indexed by stem.  Muted stems ignore these and
+ * draw in flat dimmed grey so the off state is unmistakable. */
+#define COL_STEM_DRUMS  255, 140,  40, 255   /* orange    */
+#define COL_STEM_BASS   130, 110, 255, 255   /* indigo    */
+#define COL_STEM_OTHER  170, 170, 195, 255   /* grey-blue */
+#define COL_STEM_VOCALS 100, 200, 120, 255   /* green     */
+#define COL_STEM_GUITAR 255, 205,  70, 255   /* amber     */
+#define COL_STEM_PIANO    0, 180, 255, 255   /* cyan      */
+#define COL_STEM_MUTED  105, 105, 118, 255   /* monotone grey, dimmed */
 
 #endif /* CSPLAYER_TYPES_H */

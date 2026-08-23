@@ -68,6 +68,15 @@ typedef struct {
     /* IIR filter output scratch: reused for each of the 3 bands in sequence. */
     f32  band_scratch[FFT_SIZE];
 
+    /* ── Instrument-stem waveforms (GRAPH_MODE_STEMS) ───────────────────── */
+    /* Screen points, per-pixel smoothing, and previous-frame amplitudes for
+     * each of the six stem grid cells.  Parallel to the band arrays above; each
+     * stem is trigger-aligned against its own history so a cell stays phase-
+     * locked to that instrument rather than to the full mix. */
+    SDL_FPoint stem_pts[STEM_COUNT][STEM_W];
+    f32  smooth_stem[STEM_COUNT][STEM_W];
+    f32  prev_stem[STEM_COUNT][STEM_W];
+
     /* Cached band-filter coefficients.  Depend only on the sample rate, so they
      * are rebuilt by spectrum_update_bands() only when band_coeff_rate changes
      * (avoids per-frame tanf() calls).  band_coeff_rate is reset to 0 by
@@ -108,7 +117,7 @@ void spectrum_init_lut(spectrum_t *s, f32 sample_rate);
 /*
  * Update smooth_db[] and pts[] from the FFT magnitude array.
  * Call once per rendered frame after fft_process().
- * pts[] are always mapped to the full [SPEC_Y, SPEC_Y+SPEC_H] rect.
+ * pts[] are always mapped to the full [PLOT_Y, PLOT_Y+PLOT_H] rect.
  * Call spectrum_map_freq_pts() afterward if a different rect is needed.
  */
 void spectrum_update(spectrum_t *s, const fft_t *f);
@@ -169,6 +178,24 @@ void spectrum_update_time(spectrum_t *s, const f32 *samples, i32 n,
  */
 void spectrum_update_bands(spectrum_t *s, const f32 *samples, i32 n,
                            f32 sample_rate, i32 plot_y, i32 plot_h);
+
+/*
+ * Fill s->stem_pts[idx] from one stem's PCM snapshot.
+ *
+ * Unlike spectrum_update_bands, no filtering happens here — the separation was
+ * done offline and each stem arrives as its own PCM stream.  The trigger +
+ * cross-correlation alignment is the same, run against s->prev_stem[idx] so
+ * each cell locks to its own instrument.
+ *
+ * Every stem uses the same STEM_WINDOW_S window, so the six cells share one
+ * time axis and can be read against each other.  The target rect is derived
+ * from idx: column idx % STEM_COLS, row idx / STEM_COLS of the plot region.
+ *
+ * samples     — chronological snapshot (oldest first) for this stem, length n.
+ * sample_rate — must be > 0.
+ */
+void spectrum_update_stem(spectrum_t *s, i32 idx, const f32 *samples, i32 n,
+                          f32 sample_rate);
 
 /*
  * Advance the scrolling spectrogram by dt seconds and merge the current FFT

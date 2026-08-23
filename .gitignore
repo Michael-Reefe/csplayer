@@ -13,4 +13,4 @@ CMakeUserPresets.json
 
 **/.DS_Store
 .claude/
-build/
+build*/

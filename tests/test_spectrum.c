@@ -123,8 +123,8 @@ static void test_spectrum_pts_in_bounds(void)
     /* After any spectrum_update, every screen y must be within the plot. */
     for (i32 x = 0; x < SPEC_W; x++) {
         f32 y = g_spec.pts[x].y;
-        CHECK(y >= (f32)SPEC_Y);
-        CHECK(y <= (f32)(SPEC_Y + SPEC_H));
+        CHECK(y >= (f32)PLOT_Y);
+        CHECK(y <= (f32)(PLOT_Y + PLOT_H));
     }
     TEST_END();
 }
@@ -138,8 +138,8 @@ static void test_spectrum_t_clamp_lo(void)
     for (i32 x = 0; x < SPEC_W; x++) g_spec.smooth_db[x] = DB_TOP + 10.0f;
     spectrum_update(&g_spec, &g_fft);
     for (i32 x = 0; x < SPEC_W; x++) {
-        CHECK(g_spec.pts[x].y >= (f32)SPEC_Y);
-        CHECK(g_spec.pts[x].y <= (f32)(SPEC_Y + SPEC_H));
+        CHECK(g_spec.pts[x].y >= (f32)PLOT_Y);
+        CHECK(g_spec.pts[x].y <= (f32)(PLOT_Y + PLOT_H));
     }
     TEST_END();
 }
@@ -152,8 +152,8 @@ static void test_spectrum_t_clamp_hi(void)
     for (i32 x = 0; x < SPEC_W; x++) g_spec.smooth_db[x] = DB_BOT - 10.0f;
     spectrum_update(&g_spec, &g_fft);
     for (i32 x = 0; x < SPEC_W; x++) {
-        CHECK(g_spec.pts[x].y <= (f32)(SPEC_Y + SPEC_H));
-        CHECK(g_spec.pts[x].y >= (f32)SPEC_Y);
+        CHECK(g_spec.pts[x].y <= (f32)(PLOT_Y + PLOT_H));
+        CHECK(g_spec.pts[x].y >= (f32)PLOT_Y);
     }
     TEST_END();
 }
@@ -164,8 +164,8 @@ static void test_time_silence(void)
 {
     TEST_BEGIN("time_silence");
     SDL_memset(g_samples, 0, sizeof(g_samples));
-    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, SPEC_Y, SPEC_H);
-    f32 expected_y = (f32)SPEC_Y + (f32)SPEC_H * 0.5f;
+    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, PLOT_Y, PLOT_H);
+    f32 expected_y = (f32)PLOT_Y + (f32)PLOT_H * 0.5f;
     for (i32 x = 0; x < SPEC_W; x++) {
         CHECK(fabsf(g_spec.time_pts[x].y - expected_y) < 1.0f);
         CHECK(g_spec.time_pts[x].x == (f32)(SPEC_X + x));
@@ -179,9 +179,9 @@ static void test_time_full_pos(void)
     /* Pre-seed smooth_time to the steady-state value (+1) so one call suffices. */
     for (i32 x = 0; x < SPEC_W; x++) { g_spec.smooth_time[x] = 1.0f; }
     for (i32 i = 0; i < RING_SIZE; i++) { g_samples[i] = 1.0f; }
-    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, SPEC_Y, SPEC_H);
+    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, PLOT_Y, PLOT_H);
     for (i32 x = 0; x < SPEC_W; x++) {
-        CHECK(fabsf(g_spec.time_pts[x].y - (f32)SPEC_Y) < 1.0f);
+        CHECK(fabsf(g_spec.time_pts[x].y - (f32)PLOT_Y) < 1.0f);
         CHECK(g_spec.time_pts[x].x == (f32)(SPEC_X + x));
     }
     TEST_END();
@@ -193,8 +193,8 @@ static void test_time_full_neg(void)
     /* Pre-seed smooth_time to the steady-state value (-1) so one call suffices. */
     for (i32 x = 0; x < SPEC_W; x++) { g_spec.smooth_time[x] = -1.0f; }
     for (i32 i = 0; i < RING_SIZE; i++) { g_samples[i] = -1.0f; }
-    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, SPEC_Y, SPEC_H);
-    f32 expected_y = (f32)(SPEC_Y + SPEC_H);
+    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, PLOT_Y, PLOT_H);
+    f32 expected_y = (f32)(PLOT_Y + PLOT_H);
     for (i32 x = 0; x < SPEC_W; x++) {
         CHECK(fabsf(g_spec.time_pts[x].y - expected_y) < 1.0f);
         CHECK(g_spec.time_pts[x].x == (f32)(SPEC_X + x));
@@ -213,9 +213,9 @@ static void test_time_trigger_found(void)
     SDL_memset(g_spec.smooth_time,  0, sizeof(g_spec.smooth_time));
     for (i32 i = 0; i < RING_SIZE; i++) { g_samples[i] = -0.5f; }
     g_samples[7200] = 0.5f;   /* samples[7199]<0 and samples[7200]>=0 → trigger */
-    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, SPEC_Y, SPEC_H);
+    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, PLOT_Y, PLOT_H);
     /* Window starts at the +0.5 trigger → first point is in the upper half. */
-    f32 center = (f32)SPEC_Y + (f32)SPEC_H * 0.5f;
+    f32 center = (f32)PLOT_Y + (f32)PLOT_H * 0.5f;
     CHECK(g_spec.time_pts[0].y < center);
     CHECK(g_spec.time_pts[0].x == (f32)SPEC_X);
     TEST_END();
@@ -226,10 +226,10 @@ static void test_time_no_trigger(void)
     TEST_BEGIN("time_no_trigger");
     /* All-positive samples → no neg→pos crossing → falls back to last win samples. */
     for (i32 i = 0; i < RING_SIZE; i++) { g_samples[i] = 0.5f; }
-    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, SPEC_Y, SPEC_H);
+    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, PLOT_Y, PLOT_H);
     for (i32 x = 0; x < SPEC_W; x++) {
-        CHECK(g_spec.time_pts[x].y >= (f32)SPEC_Y);
-        CHECK(g_spec.time_pts[x].y <= (f32)(SPEC_Y + SPEC_H));
+        CHECK(g_spec.time_pts[x].y >= (f32)PLOT_Y);
+        CHECK(g_spec.time_pts[x].y <= (f32)(PLOT_Y + PLOT_H));
     }
     TEST_END();
 }
@@ -241,10 +241,10 @@ static void test_time_pts_bounds(void)
     for (i32 i = 0; i < RING_SIZE; i++) {
         g_samples[i] = (i % 2 == 0) ? 1.0f : -1.0f;
     }
-    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, SPEC_Y, SPEC_H);
+    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, PLOT_Y, PLOT_H);
     for (i32 x = 0; x < SPEC_W; x++) {
-        CHECK(g_spec.time_pts[x].y >= (f32)SPEC_Y);
-        CHECK(g_spec.time_pts[x].y <= (f32)(SPEC_Y + SPEC_H));
+        CHECK(g_spec.time_pts[x].y >= (f32)PLOT_Y);
+        CHECK(g_spec.time_pts[x].y <= (f32)(PLOT_Y + PLOT_H));
         CHECK(g_spec.time_pts[x].x >= (f32)SPEC_X);
         CHECK(g_spec.time_pts[x].x <  (f32)(SPEC_X + SPEC_W));
     }
@@ -255,17 +255,17 @@ static void test_time_both_rects(void)
 {
     TEST_BEGIN("time_both_rects");
     /* Same zero input mapped to upper-half rect then lower-half rect:
-     * centre y must differ by exactly SPEC_H/2. */
+     * centre y must differ by exactly PLOT_H/2. */
     SDL_memset(g_samples, 0, sizeof(g_samples));
-    i32 half = SPEC_H / 2;
-    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, SPEC_Y, half);
+    i32 half = PLOT_H / 2;
+    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, PLOT_Y, half);
     f32 upper_y = g_spec.time_pts[0].y;
-    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, SPEC_Y + half, half);
+    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, PLOT_Y + half, half);
     f32 lower_y = g_spec.time_pts[0].y;
     CHECK(lower_y > upper_y);
     for (i32 x = 0; x < SPEC_W; x++) {
-        CHECK(g_spec.time_pts[x].y >= (f32)(SPEC_Y + half));
-        CHECK(g_spec.time_pts[x].y <= (f32)(SPEC_Y + SPEC_H));
+        CHECK(g_spec.time_pts[x].y >= (f32)(PLOT_Y + half));
+        CHECK(g_spec.time_pts[x].y <= (f32)(PLOT_Y + PLOT_H));
     }
     TEST_END();
 }
@@ -277,10 +277,10 @@ static void test_time_low_sr(void)
     for (i32 i = 0; i < RING_SIZE; i++) {
         g_samples[i] = (i % 2 == 0) ? 0.5f : -0.5f;
     }
-    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 100.0f, SPEC_Y, SPEC_H);
+    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 100.0f, PLOT_Y, PLOT_H);
     for (i32 x = 0; x < SPEC_W; x++) {
-        CHECK(g_spec.time_pts[x].y >= (f32)SPEC_Y);
-        CHECK(g_spec.time_pts[x].y <= (f32)(SPEC_Y + SPEC_H));
+        CHECK(g_spec.time_pts[x].y >= (f32)PLOT_Y);
+        CHECK(g_spec.time_pts[x].y <= (f32)(PLOT_Y + PLOT_H));
     }
     TEST_END();
 }
@@ -290,7 +290,7 @@ static void test_time_xcorr_aligns(void)
     TEST_BEGIN("time_xcorr_aligns");
     /* Unit spike at P1=7100, zeros elsewhere.  Set prev_window[0]=1 so xcorr
      * at c=P1 gives corr=1.0 (unique maximum over all candidates = 0).
-     * xcorr must select P1 → pts[0] maps to amplitude +1 → y == SPEC_Y. */
+     * xcorr must select P1 → pts[0] maps to amplitude +1 → y == PLOT_Y. */
     i32 win = (i32)(WAVE_WINDOW_S * 44100.0f);  /* 882 */
     i32 P1  = 7100;
     assert(P1 >= (RING_SIZE - XCORR_SEARCH) && P1 + win <= RING_SIZE);
@@ -299,10 +299,10 @@ static void test_time_xcorr_aligns(void)
     SDL_memset(g_spec.smooth_time, 0, sizeof(g_spec.smooth_time));
     g_samples[P1]          = 1.0f;   /* single +1 spike at P1 */
     g_spec.prev_window[0]  = 1.0f;   /* only pixel-0 participates in xcorr */
-    g_spec.smooth_time[0]  = 1.0f;   /* steady-state so pts[0].y == SPEC_Y */
-    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, SPEC_Y, SPEC_H);
+    g_spec.smooth_time[0]  = 1.0f;   /* steady-state so pts[0].y == PLOT_Y */
+    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 44100.0f, PLOT_Y, PLOT_H);
     /* xcorr found P1 → pts[0] maps to +1.0 → y is at the top of the plot. */
-    CHECK(fabsf(g_spec.time_pts[0].y - (f32)SPEC_Y) < 1.0f);
+    CHECK(fabsf(g_spec.time_pts[0].y - (f32)PLOT_Y) < 1.0f);
     CHECK(g_spec.time_pts[0].x == (f32)SPEC_X);
     TEST_END();
 }
@@ -315,11 +315,11 @@ static void test_map_pts_upper_half(void)
     for (i32 k = 0; k < FFT_BINS; k++) { g_fft.mags[k] = 0.1f; }
     for (i32 x = 0; x < SPEC_W; x++) { g_spec.smooth_db[x] = DB_BOT; }
     spectrum_update(&g_spec, &g_fft);
-    i32 half = SPEC_H / 2;
-    spectrum_map_freq_pts(&g_spec, SPEC_Y, half);
+    i32 half = PLOT_H / 2;
+    spectrum_map_freq_pts(&g_spec, PLOT_Y, half);
     for (i32 x = 0; x < SPEC_W; x++) {
-        CHECK(g_spec.pts[x].y >= (f32)SPEC_Y);
-        CHECK(g_spec.pts[x].y <= (f32)(SPEC_Y + half));
+        CHECK(g_spec.pts[x].y >= (f32)PLOT_Y);
+        CHECK(g_spec.pts[x].y <= (f32)(PLOT_Y + half));
     }
     TEST_END();
 }
@@ -327,13 +327,13 @@ static void test_map_pts_upper_half(void)
 static void test_map_pts_full(void)
 {
     TEST_BEGIN("map_pts_full");
-    /* map_freq_pts(SPEC_Y, SPEC_H) must reproduce the same pts as spectrum_update. */
+    /* map_freq_pts(PLOT_Y, PLOT_H) must reproduce the same pts as spectrum_update. */
     for (i32 k = 0; k < FFT_BINS; k++) { g_fft.mags[k] = 0.05f; }
     for (i32 x = 0; x < SPEC_W; x++) { g_spec.smooth_db[x] = -45.0f; }
     spectrum_update(&g_spec, &g_fft);
     SDL_FPoint saved[SPEC_W];
     SDL_memcpy(saved, g_spec.pts, sizeof(saved));
-    spectrum_map_freq_pts(&g_spec, SPEC_Y, SPEC_H);
+    spectrum_map_freq_pts(&g_spec, PLOT_Y, PLOT_H);
     for (i32 x = 0; x < SPEC_W; x++) {
         CHECK(fabsf(g_spec.pts[x].y - saved[x].y) < 1e-3f);
         CHECK(g_spec.pts[x].x == (f32)(SPEC_X + x));
@@ -346,8 +346,8 @@ static void test_map_pts_silence(void)
     TEST_BEGIN("map_pts_silence");
     /* DB_BOT → t = 1.0 → y == plot_y + plot_h (bottom of plot). */
     for (i32 x = 0; x < SPEC_W; x++) { g_spec.smooth_db[x] = DB_BOT; }
-    spectrum_map_freq_pts(&g_spec, SPEC_Y, SPEC_H);
-    f32 expected_y = (f32)(SPEC_Y + SPEC_H);
+    spectrum_map_freq_pts(&g_spec, PLOT_Y, PLOT_H);
+    f32 expected_y = (f32)(PLOT_Y + PLOT_H);
     for (i32 x = 0; x < SPEC_W; x++) {
         CHECK(fabsf(g_spec.pts[x].y - expected_y) < 1e-3f);
         CHECK(g_spec.pts[x].x == (f32)(SPEC_X + x));
@@ -362,10 +362,10 @@ static void test_time_xcorr_shi_lt_slo(void)
      * xcorr_best_start: shi=RING_SIZE-3000=5192 < slo=RING_SIZE-2048=6144
      * → returns fallback immediately; output must still be in-bounds. */
     SDL_memset(g_samples, 0, sizeof(g_samples));
-    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 150000.0f, SPEC_Y, SPEC_H);
+    spectrum_update_time(&g_spec, g_samples, RING_SIZE, 150000.0f, PLOT_Y, PLOT_H);
     for (i32 x = 0; x < SPEC_W; x++) {
-        CHECK(g_spec.time_pts[x].y >= (f32)SPEC_Y);
-        CHECK(g_spec.time_pts[x].y <= (f32)(SPEC_Y + SPEC_H));
+        CHECK(g_spec.time_pts[x].y >= (f32)PLOT_Y);
+        CHECK(g_spec.time_pts[x].y <= (f32)(PLOT_Y + PLOT_H));
     }
     TEST_END();
 }
@@ -384,9 +384,9 @@ static void test_biquad_lp_attenuates_highs(void)
     SDL_memset(g_spec.smooth_bass, 0, sizeof(g_spec.smooth_bass));
     SDL_memset(g_spec.prev_bass,   0, sizeof(g_spec.prev_bass));
     for (i32 c = 0; c < 30; c++) {
-        spectrum_update_bands(&g_spec, g_samples, RING_SIZE, sr, SPEC_Y, SPEC_H);
+        spectrum_update_bands(&g_spec, g_samples, RING_SIZE, sr, PLOT_Y, PLOT_H);
     }
-    f32 center = (f32)SPEC_Y + (f32)SPEC_H * 0.5f;
+    f32 center = (f32)PLOT_Y + (f32)PLOT_H * 0.5f;
     for (i32 x = 0; x < BAND_W; x++) {
         CHECK(fabsf(g_spec.bass_pts[x].y - center) < 2.0f);
     }
@@ -406,9 +406,9 @@ static void test_biquad_lp_passes_bass(void)
     SDL_memset(g_spec.smooth_bass, 0, sizeof(g_spec.smooth_bass));
     SDL_memset(g_spec.prev_bass,   0, sizeof(g_spec.prev_bass));
     for (i32 c = 0; c < 30; c++) {
-        spectrum_update_bands(&g_spec, g_samples, RING_SIZE, sr, SPEC_Y, SPEC_H);
+        spectrum_update_bands(&g_spec, g_samples, RING_SIZE, sr, PLOT_Y, PLOT_H);
     }
-    f32 center = (f32)SPEC_Y + (f32)SPEC_H * 0.5f;
+    f32 center = (f32)PLOT_Y + (f32)PLOT_H * 0.5f;
     i32 non_zero = 0;
     for (i32 x = 0; x < BAND_W; x++) {
         if (fabsf(g_spec.bass_pts[x].y - center) > 2.0f) { non_zero++; }
@@ -430,9 +430,9 @@ static void test_biquad_hp_attenuates_bass(void)
     SDL_memset(g_spec.smooth_high, 0, sizeof(g_spec.smooth_high));
     SDL_memset(g_spec.prev_high,   0, sizeof(g_spec.prev_high));
     for (i32 c = 0; c < 30; c++) {
-        spectrum_update_bands(&g_spec, g_samples, RING_SIZE, sr, SPEC_Y, SPEC_H);
+        spectrum_update_bands(&g_spec, g_samples, RING_SIZE, sr, PLOT_Y, PLOT_H);
     }
-    f32 center = (f32)SPEC_Y + (f32)SPEC_H * 0.5f;
+    f32 center = (f32)PLOT_Y + (f32)PLOT_H * 0.5f;
     for (i32 x = 0; x < BAND_W; x++) {
         CHECK(fabsf(g_spec.high_pts[x].y - center) < 2.0f);
     }
@@ -451,15 +451,15 @@ static void test_bands_pts_bounds_iir(void)
                      + 0.4f * sinf(2.0f * 3.14159265f * 6000.0f * (f32)i / sr);
     }
     for (i32 c = 0; c < 5; c++) {
-        spectrum_update_bands(&g_spec, g_samples, RING_SIZE, sr, SPEC_Y, SPEC_H);
+        spectrum_update_bands(&g_spec, g_samples, RING_SIZE, sr, PLOT_Y, PLOT_H);
     }
     for (i32 x = 0; x < BAND_W; x++) {
-        CHECK(g_spec.bass_pts[x].y >= (f32)SPEC_Y);
-        CHECK(g_spec.bass_pts[x].y <= (f32)(SPEC_Y + SPEC_H));
-        CHECK(g_spec.mid_pts[x].y  >= (f32)SPEC_Y);
-        CHECK(g_spec.mid_pts[x].y  <= (f32)(SPEC_Y + SPEC_H));
-        CHECK(g_spec.high_pts[x].y >= (f32)SPEC_Y);
-        CHECK(g_spec.high_pts[x].y <= (f32)(SPEC_Y + SPEC_H));
+        CHECK(g_spec.bass_pts[x].y >= (f32)PLOT_Y);
+        CHECK(g_spec.bass_pts[x].y <= (f32)(PLOT_Y + PLOT_H));
+        CHECK(g_spec.mid_pts[x].y  >= (f32)PLOT_Y);
+        CHECK(g_spec.mid_pts[x].y  <= (f32)(PLOT_Y + PLOT_H));
+        CHECK(g_spec.high_pts[x].y >= (f32)PLOT_Y);
+        CHECK(g_spec.high_pts[x].y <= (f32)(PLOT_Y + PLOT_H));
     }
     TEST_END();
 }
@@ -475,8 +475,8 @@ static void test_bands_silence_iir(void)
     SDL_memset(g_spec.prev_bass,   0, sizeof(g_spec.prev_bass));
     SDL_memset(g_spec.prev_mid,    0, sizeof(g_spec.prev_mid));
     SDL_memset(g_spec.prev_high,   0, sizeof(g_spec.prev_high));
-    spectrum_update_bands(&g_spec, g_samples, RING_SIZE, 44100.0f, SPEC_Y, SPEC_H);
-    f32 center = (f32)SPEC_Y + (f32)SPEC_H * 0.5f;
+    spectrum_update_bands(&g_spec, g_samples, RING_SIZE, 44100.0f, PLOT_Y, PLOT_H);
+    f32 center = (f32)PLOT_Y + (f32)PLOT_H * 0.5f;
     for (i32 x = 0; x < BAND_W; x++) {
         CHECK(fabsf(g_spec.bass_pts[x].y - center) < 1.0f);
         CHECK(fabsf(g_spec.mid_pts[x].y  - center) < 1.0f);
@@ -492,18 +492,18 @@ static void test_bands_coeff_cache(void)
     SDL_memset(g_samples, 0, sizeof(g_samples));
 
     /* First call at 44.1 kHz builds the coefficients. */
-    spectrum_update_bands(&g_spec, g_samples, RING_SIZE, 44100.0f, SPEC_Y, SPEC_H);
+    spectrum_update_bands(&g_spec, g_samples, RING_SIZE, 44100.0f, PLOT_Y, PLOT_H);
     CHECK(g_spec.band_coeff_rate == 44100.0f);
     f32 b0_44k = g_spec.band_lp_bass.b0;
 
     /* Second call at the same rate must NOT rebuild (cache-hit branch): the
      * cached coefficients are unchanged. */
-    spectrum_update_bands(&g_spec, g_samples, RING_SIZE, 44100.0f, SPEC_Y, SPEC_H);
+    spectrum_update_bands(&g_spec, g_samples, RING_SIZE, 44100.0f, PLOT_Y, PLOT_H);
     CHECK(g_spec.band_coeff_rate == 44100.0f);
     CHECK(g_spec.band_lp_bass.b0 == b0_44k);
 
     /* Changing the rate must rebuild (different cutoff/rate → different b0). */
-    spectrum_update_bands(&g_spec, g_samples, RING_SIZE, 48000.0f, SPEC_Y, SPEC_H);
+    spectrum_update_bands(&g_spec, g_samples, RING_SIZE, 48000.0f, PLOT_Y, PLOT_H);
     CHECK(g_spec.band_coeff_rate == 48000.0f);
     CHECK(g_spec.band_lp_bass.b0 != b0_44k);
 
@@ -823,6 +823,109 @@ static void test_specgram_pixels_hot(void)
     TEST_END();
 }
 
+/* ── Instrument-stem waveforms ───────────────────────────────────────────── */
+
+static void test_stem_pts_in_own_cell(void)
+{
+    TEST_BEGIN("stem_pts_in_own_cell");
+    /* Each stem's points must land inside its own 3×2 grid cell and nowhere
+     * else — a wrong row or column would silently draw over a neighbour. */
+    f32 sr = 44100.0f;
+    for (i32 i = 0; i < RING_SIZE; i++) {
+        g_samples[i] = 0.8f * sinf(2.0f * 3.14159265f * 300.0f * (f32)i / sr);
+    }
+    for (i32 idx = 0; idx < STEM_COUNT; idx++) {
+        for (i32 c = 0; c < 3; c++) {
+            spectrum_update_stem(&g_spec, idx, g_samples, RING_SIZE, sr);
+        }
+        i32 x0 = SPEC_X + (idx % STEM_COLS) * STEM_W;
+        i32 y0 = PLOT_Y + (idx / STEM_COLS) * STEM_H;
+        for (i32 x = 0; x < STEM_W; x++) {
+            CHECK(g_spec.stem_pts[idx][x].x == (f32)(x0 + x));
+            CHECK(g_spec.stem_pts[idx][x].y >= (f32)y0);
+            CHECK(g_spec.stem_pts[idx][x].y <= (f32)(y0 + STEM_H));
+        }
+    }
+    TEST_END();
+}
+
+static void test_stem_silence_is_centred(void)
+{
+    TEST_BEGIN("stem_silence_is_centred");
+    SDL_memset(g_samples, 0, sizeof(g_samples));
+    SDL_memset(g_spec.smooth_stem, 0, sizeof(g_spec.smooth_stem));
+    SDL_memset(g_spec.prev_stem,   0, sizeof(g_spec.prev_stem));
+    for (i32 idx = 0; idx < STEM_COUNT; idx++) {
+        spectrum_update_stem(&g_spec, idx, g_samples, RING_SIZE, 44100.0f);
+        f32 centre = (f32)(PLOT_Y + (idx / STEM_COLS) * STEM_H) + (f32)STEM_H * 0.5f;
+        for (i32 x = 0; x < STEM_W; x++) {
+            CHECK(fabsf(g_spec.stem_pts[idx][x].y - centre) < 1.0f);
+        }
+    }
+    TEST_END();
+}
+
+static void test_stem_shared_time_axis(void)
+{
+    TEST_BEGIN("stem_shared_time_axis");
+    /* The point of this view is comparability: every stem must sample the same
+     * window length, unlike the per-band windows of the decompose view. */
+    f32 sr = 44100.0f;
+    i32 expect = (i32)(STEM_WINDOW_S * sr);
+    CHECK(expect > 0);
+    CHECK(expect <= RING_SIZE);
+    /* A ramp makes the sampled span visible: with one shared window, the first
+     * and last pixel of every cell span the same number of source samples. */
+    for (i32 i = 0; i < RING_SIZE; i++) {
+        g_samples[i] = -1.0f + 2.0f * (f32)i / (f32)(RING_SIZE - 1);
+    }
+    SDL_memset(g_spec.smooth_stem, 0, sizeof(g_spec.smooth_stem));
+    SDL_memset(g_spec.prev_stem,   0, sizeof(g_spec.prev_stem));
+    for (i32 idx = 0; idx < STEM_COUNT; idx++) {
+        spectrum_update_stem(&g_spec, idx, g_samples, RING_SIZE, sr);
+    }
+    /* Same input to every cell → identical vertical shape, cell offset aside. */
+    for (i32 x = 0; x < STEM_W; x++) {
+        f32 base = g_spec.stem_pts[0][x].y - (f32)PLOT_Y;
+        for (i32 idx = 1; idx < STEM_COUNT; idx++) {
+            f32 rel = g_spec.stem_pts[idx][x].y
+                    - (f32)(PLOT_Y + (idx / STEM_COLS) * STEM_H);
+            CHECK(fabsf(rel - base) < 1.0f);
+        }
+    }
+    TEST_END();
+}
+
+static void test_stem_extremes_clamp(void)
+{
+    TEST_BEGIN("stem_extremes_clamp");
+    /* Out-of-range input must clamp to the cell, not overdraw its neighbour. */
+    for (i32 i = 0; i < RING_SIZE; i++) {
+        g_samples[i] = (i % 2 == 0) ? 4.0f : -4.0f;
+    }
+    i32 idx = STEM_COUNT - 1;                  /* bottom-right cell */
+    for (i32 c = 0; c < 40; c++) {
+        spectrum_update_stem(&g_spec, idx, g_samples, RING_SIZE, 44100.0f);
+    }
+    i32 y0 = PLOT_Y + (idx / STEM_COLS) * STEM_H;
+    for (i32 x = 0; x < STEM_W; x++) {
+        CHECK(g_spec.stem_pts[idx][x].y >= (f32)y0);
+        CHECK(g_spec.stem_pts[idx][x].y <= (f32)(y0 + STEM_H));
+    }
+    TEST_END();
+}
+
+static void test_stem_grid_tiles_plot_exactly(void)
+{
+    TEST_BEGIN("stem_grid_tiles_plot_exactly");
+    /* The grid must divide the plot with no leftover pixels, or cells would
+     * drift out of alignment with the panel edges. */
+    CHECK(SPEC_W == STEM_COLS * STEM_W);
+    CHECK(PLOT_H == STEM_ROWS * STEM_H);
+    CHECK(STEM_COLS * STEM_ROWS == STEM_COUNT);
+    TEST_END();
+}
+
 /* ── Suite ───────────────────────────────────────────────────────────────── */
 
 void run_spectrum_tests(void)
@@ -863,6 +966,12 @@ void run_spectrum_tests(void)
     test_bands_pts_bounds_iir();
     test_bands_silence_iir();
     test_bands_coeff_cache();
+
+    test_stem_grid_tiles_plot_exactly();
+    test_stem_pts_in_own_cell();
+    test_stem_silence_is_centred();
+    test_stem_shared_time_axis();
+    test_stem_extremes_clamp();
 
     test_specgram_accumulate_and_advance();
     test_specgram_max_merge();

@@ -748,6 +748,316 @@ static void test_audio_play_looped_fail_play(void)
 
 /* ── Suite ───────────────────────────────────────────────────────────────── */
 
+/* ── Instrument-stem playback ────────────────────────────────────────────────
+ * audio_t now carries six RING_SIZE stem buffers (~224 KB total), so these
+ * tests share one file-scope instance rather than putting it on the stack. */
+
+static audio_t g_sa;
+
+/* Six paths, all the test WAV — audio.c only cares that each one loads. */
+static void stem_paths(const char *out[STEM_COUNT])
+{
+    for (i32 i = 0; i < STEM_COUNT; i++) { out[i] = g_test_wav_path; }
+}
+
+static void test_audio_load_stems_success(void)
+{
+    TEST_BEGIN("audio_load_stems_success");
+    const char *paths[STEM_COUNT];
+    stem_paths(paths);
+    SDL_memset(&g_sa, 0, sizeof(g_sa));
+    CHECK(audio_init(&g_sa));
+    CHECK(audio_load_stems(&g_sa, paths));
+    CHECK(g_sa.stems_active);
+    for (i32 i = 0; i < STEM_COUNT; i++) {
+        CHECK(g_sa.stem_track[i] != NULL);
+        CHECK(g_sa.stem_audio[i] != NULL);
+        CHECK(g_sa.stem_cb_ud[i].idx == i);
+        CHECK(g_sa.stem_cb_ud[i].a == &g_sa);
+    }
+    /* Stem 0 is the reference clock, so its duration must be adopted. */
+    CHECK(g_sa.duration_frames > 0);
+    CHECK(g_sa.sample_rate > 0.0f);
+    audio_quit(&g_sa);
+    TEST_END();
+}
+
+static void test_audio_load_stems_null_path(void)
+{
+    TEST_BEGIN("audio_load_stems_null_path");
+    const char *paths[STEM_COUNT];
+    stem_paths(paths);
+    paths[4] = NULL;
+    SDL_memset(&g_sa, 0, sizeof(g_sa));
+    CHECK(audio_init(&g_sa));
+    suppress_sdl_log();
+    CHECK(!audio_load_stems(&g_sa, paths));
+    restore_sdl_log();
+    /* A partial load must leave nothing active or half-attached. */
+    CHECK(!g_sa.stems_active);
+    for (i32 i = 0; i < STEM_COUNT; i++) { CHECK(g_sa.stem_audio[i] == NULL); }
+    audio_quit(&g_sa);
+    TEST_END();
+}
+
+static void test_audio_load_stems_failure_branches(void)
+{
+    TEST_BEGIN("audio_load_stems_failure_branches");
+    const char *paths[STEM_COUNT];
+    stem_paths(paths);
+
+    /* Each mock is one-shot, so it trips on the first stem and the whole load
+     * must unwind.  Every failure point inside load_one_stem is covered. */
+    bool *flags[4] = {
+        &g_mock_MIX_LoadAudio_fail,
+        &g_mock_MIX_SetTrackAudio_fail,
+        &g_mock_MIX_TagTrack_fail,
+        &g_mock_MIX_SetTrackRawCallback_fail,
+    };
+    for (i32 i = 0; i < 4; i++) {
+        SDL_memset(&g_sa, 0, sizeof(g_sa));
+        CHECK(audio_init(&g_sa));
+        *flags[i] = true;
+        suppress_sdl_log();
+        CHECK(!audio_load_stems(&g_sa, paths));
+        restore_sdl_log();
+        CHECK(!g_sa.stems_active);
+        *flags[i] = false;
+        audio_quit(&g_sa);
+    }
+    TEST_END();
+}
+
+static void test_audio_play_stems(void)
+{
+    TEST_BEGIN("audio_play_stems");
+    const char *paths[STEM_COUNT];
+    stem_paths(paths);
+    SDL_memset(&g_sa, 0, sizeof(g_sa));
+    CHECK(audio_init(&g_sa));
+
+    /* Not loaded → refuses rather than starting an empty tag. */
+    CHECK(!audio_play_stems(&g_sa));
+
+    CHECK(audio_load_stems(&g_sa, paths));
+    CHECK(audio_play_stems(&g_sa));
+    CHECK(g_sa.status == AUDIO_STATUS_PLAYING);
+    audio_quit(&g_sa);
+    TEST_END();
+}
+
+static void test_audio_play_stems_failures(void)
+{
+    TEST_BEGIN("audio_play_stems_failures");
+    const char *paths[STEM_COUNT];
+    stem_paths(paths);
+    SDL_memset(&g_sa, 0, sizeof(g_sa));
+    CHECK(audio_init(&g_sa));
+    CHECK(audio_load_stems(&g_sa, paths));
+
+    g_mock_SDL_CreateProperties_fail = true;
+    suppress_sdl_log();
+    CHECK(!audio_play_stems(&g_sa));
+    restore_sdl_log();
+    g_mock_SDL_CreateProperties_fail = false;
+
+    g_mock_MIX_PlayTag_fail = true;
+    suppress_sdl_log();
+    CHECK(!audio_play_stems(&g_sa));
+    restore_sdl_log();
+    g_mock_MIX_PlayTag_fail = false;
+
+    audio_quit(&g_sa);
+    TEST_END();
+}
+
+static void test_audio_stem_transport(void)
+{
+    TEST_BEGIN("audio_stem_transport");
+    const char *paths[STEM_COUNT];
+    stem_paths(paths);
+    SDL_memset(&g_sa, 0, sizeof(g_sa));
+    CHECK(audio_init(&g_sa));
+    CHECK(audio_load_stems(&g_sa, paths));
+
+    /* audio_play routes to the tag when stems are active. */
+    CHECK(audio_play(&g_sa));
+    CHECK(g_sa.status == AUDIO_STATUS_PLAYING);
+    /* Pause and resume must both go through the tag, not the idle single track. */
+    CHECK(audio_toggle_pause(&g_sa));
+    CHECK(g_sa.status == AUDIO_STATUS_PAUSED);
+    CHECK(audio_play(&g_sa));
+    CHECK(g_sa.status == AUDIO_STATUS_PLAYING);
+    /* Seek and position come from the stem tracks. */
+    CHECK(audio_seek(&g_sa, 0.5f));
+    f32 pos = audio_get_pos(&g_sa);
+    CHECK(pos >= 0.0f && pos <= 1.0f);
+    CHECK(audio_stop(&g_sa));
+    CHECK(g_sa.status == AUDIO_STATUS_STOPPED);
+
+    audio_quit(&g_sa);
+    TEST_END();
+}
+
+static void test_audio_set_stem_enabled(void)
+{
+    TEST_BEGIN("audio_set_stem_enabled");
+    const char *paths[STEM_COUNT];
+    stem_paths(paths);
+    SDL_memset(&g_sa, 0, sizeof(g_sa));
+    CHECK(audio_init(&g_sa));
+
+    /* Before load: must be a silent no-op, not a crash. */
+    audio_set_stem_enabled(&g_sa, 0, false);
+    CHECK(!g_sa.stems_active);
+
+    CHECK(audio_load_stems(&g_sa, paths));
+    for (i32 i = 0; i < STEM_COUNT; i++) {
+        audio_set_stem_enabled(&g_sa, i, false);
+        audio_set_stem_enabled(&g_sa, i, true);
+    }
+    CHECK(g_sa.stems_active);
+    audio_quit(&g_sa);
+    TEST_END();
+}
+
+static void test_audio_snapshot_stem_ring(void)
+{
+    TEST_BEGIN("audio_snapshot_stem_ring");
+    static f32 dst[RING_SIZE];
+    const char *paths[STEM_COUNT];
+    stem_paths(paths);
+    SDL_memset(&g_sa, 0, sizeof(g_sa));
+    CHECK(audio_init(&g_sa));
+
+    /* Not loaded → silence, so callers never read uninitialised audio. */
+    for (i32 i = 0; i < RING_SIZE; i++) { dst[i] = 1.0f; }
+    audio_snapshot_stem_ring(&g_sa, 2, dst);
+    CHECK(dst[0] == 0.0f);
+    CHECK(dst[RING_SIZE - 1] == 0.0f);
+
+    CHECK(audio_load_stems(&g_sa, paths));
+    /* Seed a known ramp and check the snapshot is rotated oldest-first. */
+    for (i32 i = 0; i < RING_SIZE; i++) { g_sa.stem_ring[3][i] = (f32)i; }
+    g_sa.stem_ring_write[3] = 10;
+    audio_snapshot_stem_ring(&g_sa, 3, dst);
+    CHECK(dst[0] == 10.0f);
+    CHECK(dst[RING_SIZE - 11] == (f32)(RING_SIZE - 1));
+    CHECK(dst[RING_SIZE - 10] == 0.0f);
+
+    audio_quit(&g_sa);
+    TEST_END();
+}
+
+static void test_audio_unload_stems_and_switch_back(void)
+{
+    TEST_BEGIN("audio_unload_stems_and_switch_back");
+    const char *paths[STEM_COUNT];
+    stem_paths(paths);
+    SDL_memset(&g_sa, 0, sizeof(g_sa));
+    CHECK(audio_init(&g_sa));
+
+    /* Unloading when nothing is loaded is harmless. */
+    audio_unload_stems(&g_sa);
+    CHECK(!g_sa.stems_active);
+
+    CHECK(audio_load_stems(&g_sa, paths));
+    CHECK(g_sa.stems_active);
+    audio_unload_stems(&g_sa);
+    CHECK(!g_sa.stems_active);
+    CHECK(g_sa.duration_frames == -1);
+    audio_unload_stems(&g_sa);        /* idempotent */
+    CHECK(!g_sa.stems_active);
+
+    /* Loading a plain track must also end stem playback. */
+    CHECK(audio_load_stems(&g_sa, paths));
+    CHECK(g_sa.stems_active);
+    CHECK(audio_load(&g_sa, g_test_wav_path));
+    CHECK(!g_sa.stems_active);
+    CHECK(g_sa.audio != NULL);
+
+    audio_quit(&g_sa);
+    TEST_END();
+}
+
+/* ── PCM capture callbacks ──────────────────────────────────────────────────
+ * Driven through the test seams in audio.c, since SDL's dummy audio driver
+ * never fires them.  What matters here is the channel down-mix and the ring
+ * wrap-around, both of which feed every waveform the app draws. */
+
+static void test_audio_capture_downmix(void)
+{
+    TEST_BEGIN("audio_capture_downmix");
+    static f32 pcm[8];
+    SDL_memset(&g_sa, 0, sizeof(g_sa));
+    CHECK(audio_init(&g_sa));
+
+    /* Stereo pairs average to mono: (1.0 + 0.0)/2 = 0.5 each frame. */
+    for (i32 i = 0; i < 8; i += 2) { pcm[i] = 1.0f; pcm[i + 1] = 0.0f; }
+    csp_test_feed_raw(&g_sa, pcm, 8, 2);
+    CHECK(g_sa.ring_write == 4);
+    for (i32 i = 0; i < 4; i++) { CHECK_NEAR(g_sa.ring[i], 0.5f, 1e-6f); }
+    /* The spec's rate and channel count are adopted from the callback. */
+    CHECK(g_sa.channels == 2);
+    CHECK(g_sa.sample_rate > 0.0f);
+
+    audio_quit(&g_sa);
+    TEST_END();
+}
+
+static void test_audio_capture_ring_wraps(void)
+{
+    TEST_BEGIN("audio_capture_ring_wraps");
+    static f32 pcm[16];
+    SDL_memset(&g_sa, 0, sizeof(g_sa));
+    CHECK(audio_init(&g_sa));
+
+    for (i32 i = 0; i < 16; i++) { pcm[i] = 1.0f; }
+    /* Start near the end so the write wraps to the front mid-batch. */
+    g_sa.ring_write = RING_SIZE - 4;
+    csp_test_feed_raw(&g_sa, pcm, 16, 1);
+    CHECK(g_sa.ring_write == 12);
+    CHECK_NEAR(g_sa.ring[RING_SIZE - 1], 1.0f, 1e-6f);
+    CHECK_NEAR(g_sa.ring[0],  1.0f, 1e-6f);
+    CHECK_NEAR(g_sa.ring[11], 1.0f, 1e-6f);
+
+    audio_quit(&g_sa);
+    TEST_END();
+}
+
+static void test_audio_capture_per_stem(void)
+{
+    TEST_BEGIN("audio_capture_per_stem");
+    static f32 pcm[4];
+    const char *paths[STEM_COUNT];
+    stem_paths(paths);
+    SDL_memset(&g_sa, 0, sizeof(g_sa));
+    CHECK(audio_init(&g_sa));
+    CHECK(audio_load_stems(&g_sa, paths));
+
+    /* Each stem must land in its own ring and nowhere else — a mixed-up index
+     * would draw one instrument's waveform in another's panel. */
+    for (i32 idx = 0; idx < STEM_COUNT; idx++) {
+        for (i32 i = 0; i < 4; i++) { pcm[i] = (f32)(idx + 1); }
+        csp_test_feed_stem(&g_sa, idx, pcm, 4, 2);
+        CHECK(g_sa.stem_ring_write[idx] == 2);
+        CHECK_NEAR(g_sa.stem_ring[idx][0], (f32)(idx + 1), 1e-6f);
+        CHECK_NEAR(g_sa.stem_ring[idx][1], (f32)(idx + 1), 1e-6f);
+    }
+    for (i32 idx = 0; idx < STEM_COUNT; idx++) {
+        CHECK_NEAR(g_sa.stem_ring[idx][0], (f32)(idx + 1), 1e-6f);
+    }
+
+    /* A muted stem still captures — that is what keeps its panel animating. */
+    audio_set_stem_enabled(&g_sa, 0, false);
+    for (i32 i = 0; i < 4; i++) { pcm[i] = 9.0f; }
+    csp_test_feed_stem(&g_sa, 0, pcm, 4, 2);
+    CHECK_NEAR(g_sa.stem_ring[0][2], 9.0f, 1e-6f);
+
+    audio_quit(&g_sa);
+    TEST_END();
+}
+
 void run_audio_tests(void)
 {
     test_audio_init_success();
@@ -795,4 +1105,20 @@ void run_audio_tests(void)
     test_audio_play_looped_success();
     test_audio_play_looped_fail_props();
     test_audio_play_looped_fail_play();
+
+    /* Instrument-stem playback */
+    test_audio_load_stems_success();
+    test_audio_load_stems_null_path();
+    test_audio_load_stems_failure_branches();
+    test_audio_play_stems();
+    test_audio_play_stems_failures();
+    test_audio_stem_transport();
+    test_audio_set_stem_enabled();
+    test_audio_snapshot_stem_ring();
+    test_audio_unload_stems_and_switch_back();
+
+    /* PCM capture callbacks */
+    test_audio_capture_downmix();
+    test_audio_capture_ring_wraps();
+    test_audio_capture_per_stem();
 }

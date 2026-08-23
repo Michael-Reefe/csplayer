@@ -34,6 +34,7 @@
 #include "playlist.h"
 #include "ui.h"
 #include "synth.h"
+#include "stems.h"
 
 /* ── Application state ───────────────────────────────────────────────────── */
 
@@ -52,9 +53,13 @@ typedef struct {
     ui_t       ui;
     app_mode_t mode;
     synth_t    synth;
+    stems_t    stems;
 
     /* Scratch buffer for the PCM snapshot passed to fft_process. */
     f32 pcm_snapshot[RING_SIZE];
+
+    /* Scratch buffer for one stem's snapshot, reused across the six stems. */
+    f32 stem_snapshot[RING_SIZE];
 
     /* SDL_GetTicksNS() at the end of the previous frame, for frame pacing. */
     u64 last_frame_ns;
@@ -173,8 +178,54 @@ static void init_font(ui_t *ui)
 }
 
 /*
+ * Load the six cached stems in place of the plain track.  Returns false (and
+ * leaves the plain track loaded) if any stem path is missing or unloadable.
+ */
+static bool load_stems_for_current(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->stems.status == STEMS_READY);
+
+    static char        buf[STEM_COUNT][PATH_MAX_LEN];
+    const char        *paths[STEM_COUNT];
+    for (i32 i = 0; i < STEM_COUNT; i++) {
+        if (!stems_stem_path(&app->stems, i, buf[i], (i32)sizeof(buf[i]))) {
+            return false;
+        }
+        paths[i] = buf[i];
+    }
+    return audio_load_stems(&app->audio, paths);
+}
+
+/*
+ * The cache said READY but the files would not load — a truncated or deleted
+ * stem, say.  Demote the status so the stems view offers a re-run instead of
+ * drawing a grid backed by no audio, and fall back to the plain mix.
+ */
+static void reject_stem_cache(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->stems.status == STEMS_READY);
+
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                 "reject_stem_cache: cached stems unusable; using the mix");
+    app->stems.status = STEMS_FAILED;
+    (void)SDL_strlcpy(app->stems.err, "Cached stems unreadable - separate again",
+                      sizeof(app->stems.err));
+    app->stems.notify = false;
+
+    const char *path = playlist_current_path(&app->playlist);
+    if (path != NULL) { (void)audio_load(&app->audio, path); }
+}
+
+/*
  * Load the current playlist track into the audio engine (without playing).
  * Also rebuilds the spectrum LUT in case the new file has a different rate.
+ *
+ * When a complete stem cache already exists for the track, playback switches to
+ * the six stem tracks so the mute toggles are live immediately — regardless of
+ * the current graph mode, since stem playback is a property of the track rather
+ * than of the view.
  */
 static void load_current_track(app_t *app)
 {
@@ -188,6 +239,11 @@ static void load_current_track(app_t *app)
         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                      "load_current_track: audio_load failed for '%s'", path);
         return;
+    }
+
+    stems_set_track(&app->stems, path);
+    if (app->stems.status == STEMS_READY && !load_stems_for_current(app)) {
+        reject_stem_cache(app);
     }
 
     /* Update spectrum LUT for the new file's sample rate. */
@@ -209,6 +265,33 @@ static void load_current_track(app_t *app)
             }
         }
     }
+}
+
+/*
+ * A separation job has just completed for the loaded track: switch playback to
+ * the six stems, restoring position and play state so the changeover is not
+ * heard as a restart.  In synth mode nothing is adopted — returning to player
+ * mode runs load_current_track, which picks the cache up then.
+ */
+static void adopt_stems(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->stems.status == STEMS_READY);
+
+    if (app->mode == APP_MODE_SYNTH) { return; }
+
+    f32            pos    = audio_get_pos(&app->audio);
+    audio_status_t before = app->audio.status;
+
+    if (!load_stems_for_current(app)) {
+        reject_stem_cache(app);
+        return;
+    }
+    if (before == AUDIO_STATUS_STOPPED) { return; }
+
+    (void)audio_play_stems(&app->audio);
+    (void)audio_seek(&app->audio, pos);
+    if (before == AUDIO_STATUS_PAUSED) { (void)audio_toggle_pause(&app->audio); }
 }
 
 /* Rebuild the synth buffer and restart playback if synth was already playing. */
@@ -269,6 +352,9 @@ static SDL_AppResult app_init_modules(app_t *app)
     spectrum_init_lut(&app->spectrum, 44100.0f);
     if (!playlist_init(&app->playlist)) { return SDL_APP_FAILURE; }
     if (!playlist_load(&app->playlist)) { return SDL_APP_FAILURE; }
+    /* Non-fatal: without a cache directory the stems view simply reports the
+     * failure when the user tries to separate. */
+    (void)stems_init(&app->stems, app->playlist.pref_path);
     init_font(&app->ui);
 
     {
@@ -283,6 +369,7 @@ static SDL_AppResult app_init_modules(app_t *app)
     }
 
     app->ui.pl_hover       = -1;
+    app->ui.stem_hover     = -1;
     app->ui.vol_pos        = 1.0f;
     app->ui.synth_inst     = app->synth.inst;
     app->ui.synth_note     = app->synth.note;
@@ -316,12 +403,50 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 
 /* ── SDL3 callback: SDL_AppIterate ───────────────────────────────────────── */
 
+/*
+ * Build the mix snapshot from the enabled stems.  With stem playback active the
+ * single-track ring is idle, so the FFT, spectrum line and spectrogram would
+ * otherwise show silence in every non-stems view.  Summing only the enabled
+ * stems also makes those views reflect the current mute state, matching what is
+ * actually audible.
+ */
+static void snapshot_stem_mix(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->audio.stems_active);
+
+    SDL_memset(app->pcm_snapshot, 0, sizeof(app->pcm_snapshot));
+    for (i32 i = 0; i < STEM_COUNT; i++) {
+        if (!app->stems.enabled[i]) { continue; }
+        audio_snapshot_stem_ring(&app->audio, i, app->stem_snapshot);
+        for (i32 k = 0; k < RING_SIZE; k++) {
+            app->pcm_snapshot[k] += app->stem_snapshot[k];
+        }
+    }
+}
+
+/* Refresh the six stem waveform panels from their individual ring buffers. */
+static void update_stem_plots(app_t *app, f32 sr)
+{
+    assert(app != NULL);
+    assert(sr  >  0.0f);
+
+    for (i32 i = 0; i < STEM_COUNT; i++) {
+        audio_snapshot_stem_ring(&app->audio, i, app->stem_snapshot);
+        spectrum_update_stem(&app->spectrum, i, app->stem_snapshot, RING_SIZE, sr);
+    }
+}
+
 static void update_spectrum(app_t *app)
 {
     assert(app != NULL);
     assert(app->audio.sample_rate >= 0.0f);
 
-    audio_snapshot_ring(&app->audio, app->pcm_snapshot);
+    if (app->audio.stems_active) {
+        snapshot_stem_mix(app);
+    } else {
+        audio_snapshot_ring(&app->audio, app->pcm_snapshot);
+    }
     fft_process(&app->fft, app->pcm_snapshot);
     spectrum_update(&app->spectrum, &app->fft);
 
@@ -337,16 +462,22 @@ static void update_spectrum(app_t *app)
 
     f32 sr = (app->audio.sample_rate > 0.0f)
                  ? app->audio.sample_rate : (f32)SYNTH_SAMPLE_RATE;
-    i32 th = (app->ui.graph_mode == GRAPH_MODE_BOTH) ? SPEC_H / 2 : SPEC_H;
-    i32 ty = (app->ui.graph_mode == GRAPH_MODE_BOTH) ? SPEC_Y + th : SPEC_Y;
+    i32 th = (app->ui.graph_mode == GRAPH_MODE_BOTH) ? PLOT_H / 2 : PLOT_H;
+    i32 ty = (app->ui.graph_mode == GRAPH_MODE_BOTH) ? PLOT_Y + th : PLOT_Y;
     spectrum_update_time(&app->spectrum, app->pcm_snapshot, RING_SIZE, sr, ty, th);
 
-    if (app->ui.wave_decompose && app->ui.graph_mode != GRAPH_MODE_FREQ) {
+    if (app->ui.wave_decompose &&
+        (app->ui.graph_mode == GRAPH_MODE_TIME ||
+         app->ui.graph_mode == GRAPH_MODE_BOTH)) {
         spectrum_update_bands(&app->spectrum, app->pcm_snapshot, RING_SIZE, sr, ty, th);
     }
 
+    if (app->ui.graph_mode == GRAPH_MODE_STEMS && app->audio.stems_active) {
+        update_stem_plots(app, sr);
+    }
+
     if (app->ui.graph_mode == GRAPH_MODE_BOTH) {
-        spectrum_map_freq_pts(&app->spectrum, SPEC_Y, SPEC_H / 2);
+        spectrum_map_freq_pts(&app->spectrum, PLOT_Y, PLOT_H / 2);
     }
 }
 
@@ -356,10 +487,26 @@ SDL_AppResult SDL_AppIterate(void *appstate)
     assert(app != NULL);
     assert(app->renderer != NULL);
 
+    /* Advance any separation job.  Adoption is driven by the moment the job
+     * ends rather than by the READY state, so it happens exactly once and a
+     * failure cannot turn into a per-frame retry loop.  A job that finishes for
+     * some other track leaves status alone, so nothing is adopted here — the
+     * cache is simply waiting on disk for when that track is selected. */
+    bool was_running = stems_job_active(&app->stems);
+    stems_poll(&app->stems);
+    if (was_running && !stems_job_active(&app->stems) &&
+        app->stems.status == STEMS_READY) {
+        adopt_stems(app);
+    }
+    /* The completion badge persists until the user actually looks at the view. */
+    if (app->stems.notify && app->ui.graph_mode == GRAPH_MODE_STEMS) {
+        stems_clear_notify(&app->stems);
+    }
+
     update_spectrum(app);
 
     ui_draw(app->renderer, &app->audio, &app->spectrum,
-            &app->playlist, &app->ui, app->mode, &app->synth);
+            &app->playlist, &app->ui, app->mode, &app->synth, &app->stems);
 
     /* Pace the loop to TARGET_FPS.  vsync alone does not bound CPU on every
      * backend (notably macOS/Metal), so sleep off any remaining frame time. */
@@ -498,6 +645,33 @@ static void dispatch_synth_note(app_t *app, i32 new_note)
     synth_rebuild_if_playing(app);
 }
 
+/* Advance to the next playlist track, or restart the loop in synth mode. */
+static void dispatch_next(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->playlist.count <= PLAYLIST_MAX);
+
+    if (app->mode == APP_MODE_SYNTH) {
+        note_seek_break(app);
+        (void)audio_seek(&app->audio, 0.0f);
+        return;
+    }
+    (void)playlist_next(&app->playlist);
+    load_current_track(app);
+    (void)audio_play(&app->audio);
+}
+
+/* Flip one stem's mute state and apply it to the live mix. */
+static void dispatch_stem_toggle(app_t *app)
+{
+    assert(app != NULL);
+    assert(app->ui.stem_hover >= 0 && app->ui.stem_hover < STEM_COUNT);
+
+    i32 idx = app->ui.stem_hover;
+    app->stems.enabled[idx] = !app->stems.enabled[idx];
+    audio_set_stem_enabled(&app->audio, idx, app->stems.enabled[idx]);
+}
+
 /* Dispatch a ui_action_t returned by any input handler to audio/playlist. */
 /* Dispatch the synth instrument/note selection actions (step and set). */
 static void dispatch_synth_select(app_t *app, ui_action_t action)
@@ -541,16 +715,7 @@ static void dispatch_action(app_t *app, ui_action_t action)
     switch (action) {
     case UI_ACTION_PLAY_PAUSE:  dispatch_play_pause(app);  break;
     case UI_ACTION_REWIND:      dispatch_rewind(app);      break;
-    case UI_ACTION_NEXT:
-        if (app->mode != APP_MODE_SYNTH) {
-            (void)playlist_next(&app->playlist);
-            load_current_track(app);
-            (void)audio_play(&app->audio);
-        } else {
-            note_seek_break(app);
-            (void)audio_seek(&app->audio, 0.0f);
-        }
-        break;
+    case UI_ACTION_NEXT:        dispatch_next(app);        break;
     case UI_ACTION_SEEK:
         note_seek_break(app);
         (void)audio_seek(&app->audio, app->ui.scrub_pos);
@@ -581,6 +746,15 @@ static void dispatch_action(app_t *app, ui_action_t action)
         break;
     case UI_ACTION_SPECGRAM:
         /* specgram_on already toggled by ui.c; scanning runs regardless */
+        break;
+    case UI_ACTION_STEMS_BEGIN:
+        (void)stems_begin(&app->stems);
+        break;
+    case UI_ACTION_STEMS_CANCEL:
+        stems_cancel(&app->stems);
+        break;
+    case UI_ACTION_STEM_TOGGLE:
+        dispatch_stem_toggle(app);
         break;
     case UI_ACTION_FULLSCREEN:
         (void)SDL_SetWindowFullscreen(app->window,
@@ -633,8 +807,8 @@ static void handle_mouse_down(app_t *app, SDL_Event *ev)
     SDL_MouseButtonEvent btn = ev->button;
     (void)SDL_RenderCoordinatesFromWindow(g_app.renderer, btn.x, btn.y,
                                           &btn.x, &btn.y);
-    ui_action_t action = ui_on_mouse_down(&app->ui, &btn,
-                                           &app->audio, &app->playlist, app->mode);
+    ui_action_t action = ui_on_mouse_down(&app->ui, &btn, &app->audio,
+                                           &app->playlist, app->mode, &app->stems);
     dispatch_action(app, action);
 }
 
@@ -712,9 +886,11 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result)
 
     app_t *app = (app_t *)appstate;
     assert(appstate == (void *)&g_app || appstate == NULL);
+    assert(result == SDL_APP_SUCCESS || result == SDL_APP_FAILURE);
     if (app == NULL) { return; }
 
     (void)playlist_save(&app->playlist);
+    stems_quit(&app->stems);
     synth_quit(&app->synth);
     audio_quit(&app->audio);
     fft_quit  (&app->fft);
