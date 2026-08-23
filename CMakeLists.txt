@@ -250,6 +250,17 @@ if(ENABLE_STEMS)
     if(TARGET demucs_mt.cpp.main AND MINGW)
         target_link_options(demucs_mt.cpp.main PRIVATE -static)
     endif()
+
+    # Windows gives a console-subsystem child its own console window when a GUI
+    # app launches it, and the usual suppression (SDL's process "background"
+    # flag) cannot be used — it also disables exit-code reporting and breaks
+    # completion detection outright on POSIX; see the note in launch_engine.
+    # Marking the engine a GUI-subsystem binary removes the console instead.
+    # It never needs one: csplayer pipes its stdout and stderr.  MinGW still
+    # dispatches to main() through its WinMain shim, so no source change.
+    if(TARGET demucs_mt.cpp.main AND WIN32)
+        set_target_properties(demucs_mt.cpp.main PROPERTIES WIN32_EXECUTABLE TRUE)
+    endif()
 endif()
 
 # ── Executable ────────────────────────────────────────────────────────────────

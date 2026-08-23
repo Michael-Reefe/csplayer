@@ -308,6 +308,11 @@ typedef enum {
 /* Cap on pipe-drain iterations per poll, so a misbehaving child cannot hold
  * the render loop (NASA Rule 2: every loop needs a fixed bound). */
 #define STEM_DRAIN_MAX    64
+/* Bounded reap after cancelling a job: at most TRIES × DELAY ms of stall in the
+ * render loop.  A forced kill is collectable almost at once, so this is
+ * generous; the bound exists so cancel can never hang the app. */
+#define STEM_REAP_TRIES     20
+#define STEM_REAP_DELAY_MS   5
 #define STEMS_TAG       "stems"        /* MIX tag grouping the six tracks     */
 #define STEMS_DIR       "stems"        /* subdirectory of the pref directory  */
 #define STEMS_DONE_FILE "done.txt"

@@ -439,8 +439,14 @@ static bool launch_engine(stems_t *s, char *engine, char *model, char *input)
                                 SDL_PROCESS_STDIO_APP);
     (void)SDL_SetBooleanProperty(props,
                                  SDL_PROP_PROCESS_CREATE_STDERR_TO_STDOUT_BOOLEAN, true);
-    (void)SDL_SetBooleanProperty(props,
-                                 SDL_PROP_PROCESS_CREATE_BACKGROUND_BOOLEAN, true);
+    /* Do NOT set SDL_PROP_PROCESS_CREATE_BACKGROUND_BOOLEAN here.  It is
+     * tempting — it is what suppresses the console window on Windows — but SDL
+     * documents that a background process's exit code "is not available, and
+     * will always be 0", and on POSIX it is worse than that: SDL polls with
+     * kill(pid, 0) instead of waitpid, so the child is never reaped, lingers as
+     * a zombie that kill() keeps reporting as alive, and the job is never seen
+     * to finish.  The separation would run to completion and the UI would sit
+     * at 100% for ever.  A console window is the lesser evil. */
     s->proc = SDL_CreateProcessWithProperties(props);
     SDL_DestroyProperties(props);
 
@@ -667,7 +673,19 @@ void stems_cancel(stems_t *s)
                         SDL_strcmp(s->job_dir, s->cache_dir) == 0);
 
     (void)SDL_KillProcess(s->proc, true);
-    (void)SDL_WaitProcess(s->proc, true, NULL);
+
+    /* Reap with a bounded poll rather than a blocking wait.  A blocking
+     * SDL_WaitProcess here runs inside the render loop, so anything that delays
+     * the child's death freezes the whole UI — and with the old background flag
+     * it never returned at all, which is what turned "cancel" into a hang the
+     * OS eventually killed.  A forced kill makes the child collectable almost
+     * immediately, so a few milliseconds is plenty; if it somehow outlives that,
+     * pressing on and leaking one zombie beats stalling the app.  SDL's POSIX
+     * destroy does not reap, so this loop is the only thing that does. */
+    for (i32 i = 0; i < STEM_REAP_TRIES; i++) {
+        if (SDL_WaitProcess(s->proc, false, NULL)) { break; }
+        SDL_Delay(STEM_REAP_DELAY_MS);
+    }
     release_child(s);
 
     wipe_partial(s->job_dir);
